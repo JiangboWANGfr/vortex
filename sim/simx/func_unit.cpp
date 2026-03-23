@@ -93,6 +93,19 @@ void AluUnit::tick() {
 				std::abort();
 			}
 			DT(3, this->name() << ": op=" << mdv_type << ", " << *trace);
+		} else if (std::get_if<AesType>(&trace->op_type)) {
+			auto aes_type = std::get<AesType>(trace->op_type);
+			switch (aes_type) {
+			case AesType::ESI:
+			case AesType::ESMI:
+			case AesType::DSI:
+			case AesType::DSMI:
+				delay = 2;
+				break;
+			default:
+				std::abort();
+			}
+			DT(3, this->name() << ": op=" << aes_type << ", " << *trace);
 		} else {
 			std::abort();
 		}
