@@ -302,6 +302,54 @@ inline uint32_t __intrin_aes_subword(uint32_t word) {
     return ret;
 }
 
+inline void __intrin_aes_inv_mixcols(uint32_t *newcols, uint32_t *oldcols) {
+    uint32_t s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+
+    s0 = __intrin_aes32esi(s0, oldcols[0], 0);
+    s0 = __intrin_aes32esi(s0, oldcols[0], 1);
+    s0 = __intrin_aes32esi(s0, oldcols[0], 2);
+    s0 = __intrin_aes32esi(s0, oldcols[0], 3);
+
+    s1 = __intrin_aes32esi(s1, oldcols[1], 0);
+    s1 = __intrin_aes32esi(s1, oldcols[1], 1);
+    s1 = __intrin_aes32esi(s1, oldcols[1], 2);
+    s1 = __intrin_aes32esi(s1, oldcols[1], 3);
+
+    s2 = __intrin_aes32esi(s2, oldcols[2], 0);
+    s2 = __intrin_aes32esi(s2, oldcols[2], 1);
+    s2 = __intrin_aes32esi(s2, oldcols[2], 2);
+    s2 = __intrin_aes32esi(s2, oldcols[2], 3);
+
+    s3 = __intrin_aes32esi(s3, oldcols[3], 0);
+    s3 = __intrin_aes32esi(s3, oldcols[3], 1);
+    s3 = __intrin_aes32esi(s3, oldcols[3], 2);
+    s3 = __intrin_aes32esi(s3, oldcols[3], 3);
+
+    newcols[0] = 0;
+    newcols[0] = __intrin_aes32dsmi(newcols[0], s0, 0);
+    newcols[0] = __intrin_aes32dsmi(newcols[0], s0, 1);
+    newcols[0] = __intrin_aes32dsmi(newcols[0], s0, 2);
+    newcols[0] = __intrin_aes32dsmi(newcols[0], s0, 3);
+
+    newcols[1] = 0;
+    newcols[1] = __intrin_aes32dsmi(newcols[1], s1, 0);
+    newcols[1] = __intrin_aes32dsmi(newcols[1], s1, 1);
+    newcols[1] = __intrin_aes32dsmi(newcols[1], s1, 2);
+    newcols[1] = __intrin_aes32dsmi(newcols[1], s1, 3);
+
+    newcols[2] = 0;
+    newcols[2] = __intrin_aes32dsmi(newcols[2], s2, 0);
+    newcols[2] = __intrin_aes32dsmi(newcols[2], s2, 1);
+    newcols[2] = __intrin_aes32dsmi(newcols[2], s2, 2);
+    newcols[2] = __intrin_aes32dsmi(newcols[2], s2, 3);
+
+    newcols[3] = 0;
+    newcols[3] = __intrin_aes32dsmi(newcols[3], s3, 0);
+    newcols[3] = __intrin_aes32dsmi(newcols[3], s3, 1);
+    newcols[3] = __intrin_aes32dsmi(newcols[3], s3, 2);
+    newcols[3] = __intrin_aes32dsmi(newcols[3], s3, 3);
+}
+
 inline void __intrin_aes_last_enc_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
     newcols[0] = __intrin_aes32esi(round_key[0], oldcols[0], 0);
     newcols[0] = __intrin_aes32esi(newcols[0], oldcols[1], 1);
