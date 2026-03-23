@@ -302,6 +302,31 @@ inline std::ostream &operator<<(std::ostream &os, const MdvType& type) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+enum class AesType {
+  ESI,
+  ESMI,
+  DSI,
+  DSMI
+};
+
+struct IntrAesArgs {
+  uint32_t byte_select : 2;
+};
+
+inline std::ostream &operator<<(std::ostream &os, const AesType& type) {
+  switch (type) {
+  case AesType::ESI:  os << "AES32ESI"; break;
+  case AesType::ESMI: os << "AES32ESMI"; break;
+  case AesType::DSI:  os << "AES32DSI"; break;
+  case AesType::DSMI: os << "AES32DSMI"; break;
+  default:
+    assert(false);
+  }
+  return os;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 enum class LsuType {
   LOAD,
   STORE,
@@ -665,6 +690,7 @@ using OpType = std::variant<
   AluType
 , BrType
 , MdvType
+, AesType
 , LsuType
 , AmoType
 , FpuType
@@ -686,6 +712,7 @@ using IntrArgs = std::variant<
   IntrAluArgs
 , IntrBrArgs
 , IntrMdvArgs
+, IntrAesArgs
 , IntrLsuArgs
 , IntrAmoArgs
 , IntrFpuArgs

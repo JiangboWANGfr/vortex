@@ -182,6 +182,17 @@ static op_string_t op_string(const Instr &instr) {
         std::abort();
       }
     },
+    [&](AesType aes_type)-> op_string_t {
+      auto aesArgs = std::get<IntrAesArgs>(instrArgs);
+      switch (aes_type) {
+      case AesType::ESI:  return {"AES32ESI",  std::to_string(aesArgs.byte_select)};
+      case AesType::ESMI: return {"AES32ESMI", std::to_string(aesArgs.byte_select)};
+      case AesType::DSI:  return {"AES32DSI",  std::to_string(aesArgs.byte_select)};
+      case AesType::DSMI: return {"AES32DSMI", std::to_string(aesArgs.byte_select)};
+      default:
+        std::abort();
+      }
+    },
     [&](FpuType fpu_type)-> op_string_t {
       auto fpuArgs = std::get<IntrFpuArgs>(instrArgs);
       switch (fpu_type) {
@@ -551,6 +562,25 @@ void Emulator::decode(uint32_t code, uint32_t wid, uint64_t uuid) {
       }
       instr->setOpType(AluType::CZERO);
       instr->setArgs(IntrAluArgs{0, 0, imm});
+    } else
+    if (op == Opcode::R && funct3 == 0x0 && (funct7 & 0x19) == 0x19) {
+      switch ((funct7 >> 1) & 0x3) {
+      case 0:
+        instr->setOpType(AesType::ESI);
+        break;
+      case 1:
+        instr->setOpType(AesType::ESMI);
+        break;
+      case 2:
+        instr->setOpType(AesType::DSI);
+        break;
+      case 3:
+        instr->setOpType(AesType::DSMI);
+        break;
+      default:
+        std::abort();
+      }
+      instr->setArgs(IntrAesArgs{funct7 >> 5});
     } else
     if ((op == Opcode::R || op == Opcode::R_W) && (funct7 & 0x1)) {
       switch (funct3) {

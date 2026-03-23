@@ -221,6 +221,175 @@ inline void vx_fence() {
     __asm__ volatile ("fence iorw, iorw");
 }
 
+inline uint32_t __intrin_aes32esi(uint32_t acc, uint32_t word, uint32_t byte_select) {
+    switch (byte_select & 0x3) {
+    case 0:
+        __asm__ volatile (".insn r 0x33, 0, 0x19, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    case 1:
+        __asm__ volatile (".insn r 0x33, 0, 0x39, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    case 2:
+        __asm__ volatile (".insn r 0x33, 0, 0x59, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    default:
+        __asm__ volatile (".insn r 0x33, 0, 0x79, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    }
+    return acc;
+}
+
+inline uint32_t __intrin_aes32esmi(uint32_t acc, uint32_t word, uint32_t byte_select) {
+    switch (byte_select & 0x3) {
+    case 0:
+        __asm__ volatile (".insn r 0x33, 0, 0x1b, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    case 1:
+        __asm__ volatile (".insn r 0x33, 0, 0x3b, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    case 2:
+        __asm__ volatile (".insn r 0x33, 0, 0x5b, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    default:
+        __asm__ volatile (".insn r 0x33, 0, 0x7b, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    }
+    return acc;
+}
+
+inline uint32_t __intrin_aes32dsi(uint32_t acc, uint32_t word, uint32_t byte_select) {
+    switch (byte_select & 0x3) {
+    case 0:
+        __asm__ volatile (".insn r 0x33, 0, 0x1d, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    case 1:
+        __asm__ volatile (".insn r 0x33, 0, 0x3d, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    case 2:
+        __asm__ volatile (".insn r 0x33, 0, 0x5d, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    default:
+        __asm__ volatile (".insn r 0x33, 0, 0x7d, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    }
+    return acc;
+}
+
+inline uint32_t __intrin_aes32dsmi(uint32_t acc, uint32_t word, uint32_t byte_select) {
+    switch (byte_select & 0x3) {
+    case 0:
+        __asm__ volatile (".insn r 0x33, 0, 0x1f, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    case 1:
+        __asm__ volatile (".insn r 0x33, 0, 0x3f, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    case 2:
+        __asm__ volatile (".insn r 0x33, 0, 0x5f, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    default:
+        __asm__ volatile (".insn r 0x33, 0, 0x7f, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        break;
+    }
+    return acc;
+}
+
+inline uint32_t __intrin_aes_subword(uint32_t word) {
+    uint32_t ret = 0;
+    ret = __intrin_aes32esi(ret, word, 0);
+    ret = __intrin_aes32esi(ret, word, 1);
+    ret = __intrin_aes32esi(ret, word, 2);
+    ret = __intrin_aes32esi(ret, word, 3);
+    return ret;
+}
+
+inline void __intrin_aes_last_enc_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
+    newcols[0] = __intrin_aes32esi(round_key[0], oldcols[0], 0);
+    newcols[0] = __intrin_aes32esi(newcols[0], oldcols[1], 1);
+    newcols[0] = __intrin_aes32esi(newcols[0], oldcols[2], 2);
+    newcols[0] = __intrin_aes32esi(newcols[0], oldcols[3], 3);
+
+    newcols[1] = __intrin_aes32esi(round_key[1], oldcols[1], 0);
+    newcols[1] = __intrin_aes32esi(newcols[1], oldcols[2], 1);
+    newcols[1] = __intrin_aes32esi(newcols[1], oldcols[3], 2);
+    newcols[1] = __intrin_aes32esi(newcols[1], oldcols[0], 3);
+
+    newcols[2] = __intrin_aes32esi(round_key[2], oldcols[2], 0);
+    newcols[2] = __intrin_aes32esi(newcols[2], oldcols[3], 1);
+    newcols[2] = __intrin_aes32esi(newcols[2], oldcols[0], 2);
+    newcols[2] = __intrin_aes32esi(newcols[2], oldcols[1], 3);
+
+    newcols[3] = __intrin_aes32esi(round_key[3], oldcols[3], 0);
+    newcols[3] = __intrin_aes32esi(newcols[3], oldcols[0], 1);
+    newcols[3] = __intrin_aes32esi(newcols[3], oldcols[1], 2);
+    newcols[3] = __intrin_aes32esi(newcols[3], oldcols[2], 3);
+}
+
+inline void __intrin_aes_enc_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
+    newcols[0] = __intrin_aes32esmi(round_key[0], oldcols[0], 0);
+    newcols[0] = __intrin_aes32esmi(newcols[0], oldcols[1], 1);
+    newcols[0] = __intrin_aes32esmi(newcols[0], oldcols[2], 2);
+    newcols[0] = __intrin_aes32esmi(newcols[0], oldcols[3], 3);
+
+    newcols[1] = __intrin_aes32esmi(round_key[1], oldcols[1], 0);
+    newcols[1] = __intrin_aes32esmi(newcols[1], oldcols[2], 1);
+    newcols[1] = __intrin_aes32esmi(newcols[1], oldcols[3], 2);
+    newcols[1] = __intrin_aes32esmi(newcols[1], oldcols[0], 3);
+
+    newcols[2] = __intrin_aes32esmi(round_key[2], oldcols[2], 0);
+    newcols[2] = __intrin_aes32esmi(newcols[2], oldcols[3], 1);
+    newcols[2] = __intrin_aes32esmi(newcols[2], oldcols[0], 2);
+    newcols[2] = __intrin_aes32esmi(newcols[2], oldcols[1], 3);
+
+    newcols[3] = __intrin_aes32esmi(round_key[3], oldcols[3], 0);
+    newcols[3] = __intrin_aes32esmi(newcols[3], oldcols[0], 1);
+    newcols[3] = __intrin_aes32esmi(newcols[3], oldcols[1], 2);
+    newcols[3] = __intrin_aes32esmi(newcols[3], oldcols[2], 3);
+}
+
+inline void __intrin_aes_last_dec_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
+    newcols[0] = __intrin_aes32dsi(round_key[0], oldcols[0], 0);
+    newcols[0] = __intrin_aes32dsi(newcols[0], oldcols[3], 1);
+    newcols[0] = __intrin_aes32dsi(newcols[0], oldcols[2], 2);
+    newcols[0] = __intrin_aes32dsi(newcols[0], oldcols[1], 3);
+
+    newcols[1] = __intrin_aes32dsi(round_key[1], oldcols[1], 0);
+    newcols[1] = __intrin_aes32dsi(newcols[1], oldcols[0], 1);
+    newcols[1] = __intrin_aes32dsi(newcols[1], oldcols[3], 2);
+    newcols[1] = __intrin_aes32dsi(newcols[1], oldcols[2], 3);
+
+    newcols[2] = __intrin_aes32dsi(round_key[2], oldcols[2], 0);
+    newcols[2] = __intrin_aes32dsi(newcols[2], oldcols[1], 1);
+    newcols[2] = __intrin_aes32dsi(newcols[2], oldcols[0], 2);
+    newcols[2] = __intrin_aes32dsi(newcols[2], oldcols[3], 3);
+
+    newcols[3] = __intrin_aes32dsi(round_key[3], oldcols[3], 0);
+    newcols[3] = __intrin_aes32dsi(newcols[3], oldcols[2], 1);
+    newcols[3] = __intrin_aes32dsi(newcols[3], oldcols[1], 2);
+    newcols[3] = __intrin_aes32dsi(newcols[3], oldcols[0], 3);
+}
+
+inline void __intrin_aes_dec_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
+    newcols[0] = __intrin_aes32dsmi(round_key[0], oldcols[0], 0);
+    newcols[0] = __intrin_aes32dsmi(newcols[0], oldcols[3], 1);
+    newcols[0] = __intrin_aes32dsmi(newcols[0], oldcols[2], 2);
+    newcols[0] = __intrin_aes32dsmi(newcols[0], oldcols[1], 3);
+
+    newcols[1] = __intrin_aes32dsmi(round_key[1], oldcols[1], 0);
+    newcols[1] = __intrin_aes32dsmi(newcols[1], oldcols[0], 1);
+    newcols[1] = __intrin_aes32dsmi(newcols[1], oldcols[3], 2);
+    newcols[1] = __intrin_aes32dsmi(newcols[1], oldcols[2], 3);
+
+    newcols[2] = __intrin_aes32dsmi(round_key[2], oldcols[2], 0);
+    newcols[2] = __intrin_aes32dsmi(newcols[2], oldcols[1], 1);
+    newcols[2] = __intrin_aes32dsmi(newcols[2], oldcols[0], 2);
+    newcols[2] = __intrin_aes32dsmi(newcols[2], oldcols[3], 3);
+
+    newcols[3] = __intrin_aes32dsmi(round_key[3], oldcols[3], 0);
+    newcols[3] = __intrin_aes32dsmi(newcols[3], oldcols[2], 1);
+    newcols[3] = __intrin_aes32dsmi(newcols[3], oldcols[1], 2);
+    newcols[3] = __intrin_aes32dsmi(newcols[3], oldcols[0], 3);
+}
+
 // Returns 1 if every active lane’s predicate is true, 0 otherwise.
 inline __attribute__((const)) int vx_vote_all(int predicate) {
     int ret;
