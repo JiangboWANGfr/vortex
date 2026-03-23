@@ -224,16 +224,16 @@ inline void vx_fence() {
 inline uint32_t __intrin_aes32esi(uint32_t acc, uint32_t word, uint32_t byte_select) {
     switch (byte_select & 0x3) {
     case 0:
-        __asm__ volatile (".insn r 0x33, 0, 0x19, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x19, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     case 1:
-        __asm__ volatile (".insn r 0x33, 0, 0x39, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x39, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     case 2:
-        __asm__ volatile (".insn r 0x33, 0, 0x59, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x59, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     default:
-        __asm__ volatile (".insn r 0x33, 0, 0x79, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x79, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     }
     return acc;
@@ -242,16 +242,16 @@ inline uint32_t __intrin_aes32esi(uint32_t acc, uint32_t word, uint32_t byte_sel
 inline uint32_t __intrin_aes32esmi(uint32_t acc, uint32_t word, uint32_t byte_select) {
     switch (byte_select & 0x3) {
     case 0:
-        __asm__ volatile (".insn r 0x33, 0, 0x1b, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x1b, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     case 1:
-        __asm__ volatile (".insn r 0x33, 0, 0x3b, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x3b, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     case 2:
-        __asm__ volatile (".insn r 0x33, 0, 0x5b, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x5b, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     default:
-        __asm__ volatile (".insn r 0x33, 0, 0x7b, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x7b, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     }
     return acc;
@@ -260,16 +260,16 @@ inline uint32_t __intrin_aes32esmi(uint32_t acc, uint32_t word, uint32_t byte_se
 inline uint32_t __intrin_aes32dsi(uint32_t acc, uint32_t word, uint32_t byte_select) {
     switch (byte_select & 0x3) {
     case 0:
-        __asm__ volatile (".insn r 0x33, 0, 0x1d, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x1d, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     case 1:
-        __asm__ volatile (".insn r 0x33, 0, 0x3d, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x3d, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     case 2:
-        __asm__ volatile (".insn r 0x33, 0, 0x5d, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x5d, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     default:
-        __asm__ volatile (".insn r 0x33, 0, 0x7d, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x7d, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     }
     return acc;
@@ -278,16 +278,16 @@ inline uint32_t __intrin_aes32dsi(uint32_t acc, uint32_t word, uint32_t byte_sel
 inline uint32_t __intrin_aes32dsmi(uint32_t acc, uint32_t word, uint32_t byte_select) {
     switch (byte_select & 0x3) {
     case 0:
-        __asm__ volatile (".insn r 0x33, 0, 0x1f, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x1f, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     case 1:
-        __asm__ volatile (".insn r 0x33, 0, 0x3f, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x3f, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     case 2:
-        __asm__ volatile (".insn r 0x33, 0, 0x5f, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x5f, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     default:
-        __asm__ volatile (".insn r 0x33, 0, 0x7f, x0, %0, %1" : "+&r"(acc) : "r"(word));
+        __asm__ volatile (".insn r 0x33, 0, 0x7f, %0, %0, %1" : "+&r"(acc) : "r"(word));
         break;
     }
     return acc;
