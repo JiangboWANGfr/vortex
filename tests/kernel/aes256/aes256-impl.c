@@ -88,20 +88,23 @@ static inline uint32_t big_endian_add(uint32_t a, uint32_t b, int *overflow) {
 // use this implementation for.
 static void increment_128bit(uint32_t *limbs, uint32_t n) {
     int overflow;
+
     limbs[3] = big_endian_add(limbs[3], n, &overflow);
-    __if (overflow) {
+    if (overflow) {
         limbs[2] = big_endian_add(limbs[2], 1, &overflow);
-    } __else {
+    } else {
         return;
-    } __endif
-    __if (overflow) {
+    }
+
+    if (overflow) {
         limbs[1] = big_endian_add(limbs[1], 1, &overflow);
-    } __else {
+    } else {
         return;
-    } __endif
-    __if (overflow) {
+    }
+
+    if (overflow) {
         limbs[0] = big_endian_add(limbs[0], 1, &overflow);
-    } __endif
+    }
 }
 
 // Modified key schedule generation from Section 5.3.5 of the AES spec
