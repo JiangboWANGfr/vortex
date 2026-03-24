@@ -26,7 +26,7 @@ module VX_alu_crypto import VX_gpu_pkg::*; #(
     `UNUSED_SPARAM(INSTANCE_ID)
 
     localparam PID_WIDTH = `LOG2UP(`NUM_THREADS / NUM_LANES);
-    localparam META_DATAW = 1 + UUID_WIDTH + NW_WIDTH + NUM_LANES + PC_BITS + 1 + NUM_REGS_BITS + PID_WIDTH + 1 + 1;
+    localparam META_DATAW = UUID_WIDTH + NW_WIDTH + NUM_LANES + PC_BITS + 1 + NUM_REGS_BITS + PID_WIDTH + 1 + 1;
 
     wire do_esi  = (execute_if.data.op_type == INST_CRYPTO_AES32ESI);
     wire do_esmi = (execute_if.data.op_type == INST_CRYPTO_AES32ESMI);
@@ -44,6 +44,7 @@ module VX_alu_crypto import VX_gpu_pkg::*; #(
 
     wire [NUM_LANES-1:0][31:0] crypto_result;
     wire crypto_ready_in;
+    wire crypto_valid_out;
 
     VX_aes #(
         .LANES (NUM_LANES)
@@ -60,11 +61,10 @@ module VX_alu_crypto import VX_gpu_pkg::*; #(
         .result         (crypto_result),
         .valid_in       (execute_if.valid),
         .ready_in       (crypto_ready_in),
-        .valid_out      (),
+        .valid_out      (crypto_valid_out),
         .ready_out      (result_if.ready)
     );
 
-    wire meta_valid;
     assign execute_if.ready = crypto_ready_in;
 
     VX_pipe_register #(
@@ -74,15 +74,15 @@ module VX_alu_crypto import VX_gpu_pkg::*; #(
         .clk      (clk),
         .reset    (reset),
         .enable   (crypto_ready_in),
-        .data_in  ({execute_if.valid, execute_if.data.uuid, execute_if.data.wid, execute_if.data.tmask,
+        .data_in  ({execute_if.data.uuid, execute_if.data.wid, execute_if.data.tmask,
                     execute_if.data.PC, execute_if.data.wb, execute_if.data.rd, execute_if.data.pid,
                     execute_if.data.sop, execute_if.data.eop}),
-        .data_out ({meta_valid, result_if.data.uuid, result_if.data.wid, result_if.data.tmask,
+        .data_out ({result_if.data.uuid, result_if.data.wid, result_if.data.tmask,
                     result_if.data.PC, result_if.data.wb, result_if.data.rd, result_if.data.pid,
                     result_if.data.sop, result_if.data.eop})
     );
 
-    assign result_if.valid = meta_valid;
+    assign result_if.valid = crypto_valid_out;
 
     for (genvar i = 0; i < NUM_LANES; ++i) begin : g_wb_data
         assign result_if.data.data[i] = `XLEN'(crypto_result[i]);
