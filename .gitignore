@@ -4,3 +4,4 @@
 *.code-workspace
 miscs/apptainer/vortex.sif
 .history
+ramulator*

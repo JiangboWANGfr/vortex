@@ -60,7 +60,7 @@ void aes256_cbc_dec(const uint8_t *iv, const uint8_t *in, const uint32_t *round_
 void aes256_ctr(const uint8_t *init_ctr, uint32_t start_block_idx,
                 const uint8_t *in, const uint32_t *round_keys, uint8_t *out,
                 int nblocks) {
-    uint8_t ctr[4 * Nb];
+    uint8_t ctr[4 * Nb] __attribute__((aligned(4)));
     //copy_state(ctr, init_ctr);
     memcpy(ctr, init_ctr, 4 * Nb);
     increment_128bit((uint32_t *)ctr, start_block_idx);
@@ -78,7 +78,9 @@ static inline uint32_t big_endian_add(uint32_t a, uint32_t b, int *overflow) {
     *overflow = sum < native;
     uint8_t big_sum[4] = {(sum >> 24) & 0xff, (sum >> 16) & 0xff,
                           (sum >> 8) & 0xff, sum & 0xff};
-    return *(uint32_t *)big_sum;
+    uint32_t ret;
+    memcpy(&ret, big_sum, sizeof(ret));
+    return ret;
 }
 
 // The CTR cipher mode puts us in a tough situation where we need to
@@ -109,16 +111,16 @@ static void increment_128bit(uint32_t *limbs, uint32_t n) {
 
 // Modified key schedule generation from Section 5.3.5 of the AES spec
 void aes256_key_exp(const uint32_t *key, uint32_t *round_keys, int inv_mix_cols) {
-    // "Rcon[i] contains the values given by [x^{i-1},{00},{00},{00}]"
-    // attempt to construct this in an endianness-safe way. note that
-    // Rcon[0] is never accessed in the algorithm below
-    static const uint8_t rcon_bytes[] = {
-        [4] = 0x01, [8] = 0x02,
-        [12] = 0x04, [16] = 0x08,
-        [20] = 0x10, [24] = 0x20,
-        [28] = 0x40,
+    static const uint32_t rcon[] = {
+        0x00000000,
+        0x00000001,
+        0x00000002,
+        0x00000004,
+        0x00000008,
+        0x00000010,
+        0x00000020,
+        0x00000040,
     };
-    const uint32_t *rcon = (uint32_t *)rcon_bytes;
     uint32_t temp;
     int i;
 
@@ -151,7 +153,7 @@ void aes256_key_exp(const uint32_t *key, uint32_t *round_keys, int inv_mix_cols)
 static void aes256_cipher(const uint8_t *xor_before, const uint8_t *xor_after,
                           const uint8_t *in, uint8_t *out,
                           const uint32_t *round_keys) {
-    uint8_t state[4 * Nb];
+    uint8_t state[4 * Nb] __attribute__((aligned(4)));
 
     memcpy(state, in, 4 * Nb);
     //copy_state(state, in);
@@ -230,7 +232,7 @@ static void aes256_cipher(const uint8_t *xor_before, const uint8_t *xor_after,
 // Equivalent inverse cipher from Section 5.3.5 of AES spec
 static void aes256_inv_cipher(const uint8_t *xor_after, const uint8_t *in,
                               uint8_t *out, const uint32_t *round_keys) {
-    uint8_t state[4 * Nb];
+    uint8_t state[4 * Nb] __attribute__((aligned(4)));
 
     memcpy(state, in, 4 * Nb);
     //copy_state(state, in);
@@ -335,10 +337,11 @@ static inline uint32_t rot_word(uint32_t word) {
 }
 
 static void add_round_key(uint8_t *state, const uint32_t *round_keys) {
-    uint32_t *state_cols = (uint32_t *)state;
-
     for (int i = 0; i < Nb; i++) {
-        state_cols[i] ^= round_keys[i];
+        uint32_t state_col;
+        memcpy(&state_col, state + i * sizeof(uint32_t), sizeof(state_col));
+        state_col ^= round_keys[i];
+        memcpy(state + i * sizeof(uint32_t), &state_col, sizeof(state_col));
     }
 }
 
