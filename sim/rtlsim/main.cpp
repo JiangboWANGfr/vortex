@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iomanip>
 #include <unistd.h>
+#include <algorithm>
 #include <util.h>
 #include <mem.h>
 #include <VX_config.h>
@@ -30,6 +31,36 @@ static void show_usage() {
 }
 
 const char* program = nullptr;
+
+static void dump_perf(vortex::RAM& ram) {
+  uint64_t total_instrs = 0;
+  uint64_t max_cycles = 0;
+
+  for (uint32_t core_id = 0; core_id < NUM_CORES; ++core_id) {
+    uint64_t cycles = 0;
+    uint64_t instrs = 0;
+    uint64_t mpm_mem_addr = IO_MPM_ADDR + core_id * 32 * sizeof(uint64_t);
+
+    ram.read(&cycles, mpm_mem_addr + (VX_CSR_MCYCLE - VX_CSR_MPM_BASE) * sizeof(uint64_t), sizeof(uint64_t));
+    ram.read(&instrs, mpm_mem_addr + (VX_CSR_MINSTRET - VX_CSR_MPM_BASE) * sizeof(uint64_t), sizeof(uint64_t));
+
+    float ipc = (cycles != 0) ? (float(instrs) / float(cycles)) : 0.0f;
+    if (NUM_CORES > 1) {
+      std::cout << "PERF: core" << core_id
+                << ": instrs=" << instrs
+                << ", cycles=" << cycles
+                << ", IPC=" << ipc << std::endl;
+    }
+
+    total_instrs += instrs;
+    max_cycles = std::max(max_cycles, cycles);
+  }
+
+  float ipc = (max_cycles != 0) ? (float(total_instrs) / float(max_cycles)) : 0.0f;
+  std::cout << "PERF: instrs=" << total_instrs
+            << ", cycles=" << max_cycles
+            << ", IPC=" << ipc << std::endl;
+}
 
 static void parse_args(int argc, char **argv) {
   	int c;
@@ -92,6 +123,8 @@ int main(int argc, char **argv) {
 #endif
 	// run simulation
 	processor.run();
+
+  dump_perf(ram);
 
 	// read exitcode from @MPM.1
   ram.read(&exitcode, (IO_MPM_ADDR + 8), 4);
