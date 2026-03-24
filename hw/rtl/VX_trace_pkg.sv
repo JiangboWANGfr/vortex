@@ -109,7 +109,15 @@ package VX_trace_pkg;
                     end
                 end
                 ALU_TYPE_OTHER: begin
-                    if (op_type[2]) begin
+                    if (op_type[3]) begin
+                        case (INST_ALU_BITS'(op_type))
+                            INST_CRYPTO_AES32ESI:  `TRACE(level, ("AES32ESI"))
+                            INST_CRYPTO_AES32ESMI: `TRACE(level, ("AES32ESMI"))
+                            INST_CRYPTO_AES32DSI:  `TRACE(level, ("AES32DSI"))
+                            INST_CRYPTO_AES32DSMI: `TRACE(level, ("AES32DSMI"))
+                            default:               `TRACE(level, ("?"))
+                        endcase
+                    end else if (op_type[2]) begin
                         case (INST_SHFL_BITS'(op_type))
                             INST_SHFL_UP:  `TRACE(level, ("SHFL.UP"))
                             INST_SHFL_DOWN:`TRACE(level, ("SHFL.DOWN"))

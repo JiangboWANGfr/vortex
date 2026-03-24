@@ -272,6 +272,11 @@ package VX_gpu_pkg;
     localparam INST_VOTE_BITS =  2;
     localparam INST_SHFL_BITS =  2;
 
+    localparam INST_CRYPTO_AES32ESI  = 4'b1000;
+    localparam INST_CRYPTO_AES32ESMI = 4'b1001;
+    localparam INST_CRYPTO_AES32DSI  = 4'b1010;
+    localparam INST_CRYPTO_AES32DSMI = 4'b1011;
+
     ///////////////////////////////////////////////////////////////////////////
 
     localparam INST_M_MUL =      3'b000;

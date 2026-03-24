@@ -175,26 +175,37 @@ module VX_decode import VX_gpu_pkg::*; #(
                 `USED_IREG (rd);
                 `USED_IREG (rs1);
                 `USED_IREG (rs2);
-                case (funct7)
-                `ifdef EXT_M_ENABLE
-                    INST_R_F7_MUL: begin
-                        // MUL, MULH, MULHSU, MULHU
-                        op_type = INST_OP_BITS'(m_type);
-                        op_args.alu.xtype = ALU_TYPE_MULDIV;
-                    end
-                `endif
-                `ifdef EXT_ZICOND_ENABLE
-                    INST_R_F7_ZICOND: begin
-                        // CZERO-EQZ, CZERO-NEZ
-                        op_type = funct3[1] ? INST_OP_BITS'(INST_ALU_CZNE) : INST_OP_BITS'(INST_ALU_CZEQ);
-                        op_args.alu.xtype = ALU_TYPE_ARITH;
-                    end
-                `endif
-                    default: begin
-                        op_type = INST_OP_BITS'(r_type);
-                        op_args.alu.xtype = ALU_TYPE_ARITH;
-                    end
-                endcase
+                if (funct3 == 3'h0 && ((funct7 & 7'h19) == 7'h19)) begin
+                    op_args.alu.xtype = ALU_TYPE_OTHER;
+                    op_args.alu.imm = `XLEN'(funct7[6:5]);
+                    case (funct7[2:1])
+                        2'b00: op_type = INST_OP_BITS'(INST_CRYPTO_AES32ESI);
+                        2'b01: op_type = INST_OP_BITS'(INST_CRYPTO_AES32ESMI);
+                        2'b10: op_type = INST_OP_BITS'(INST_CRYPTO_AES32DSI);
+                        2'b11: op_type = INST_OP_BITS'(INST_CRYPTO_AES32DSMI);
+                    endcase
+                end else begin
+                    case (funct7)
+                    `ifdef EXT_M_ENABLE
+                        INST_R_F7_MUL: begin
+                            // MUL, MULH, MULHSU, MULHU
+                            op_type = INST_OP_BITS'(m_type);
+                            op_args.alu.xtype = ALU_TYPE_MULDIV;
+                        end
+                    `endif
+                    `ifdef EXT_ZICOND_ENABLE
+                        INST_R_F7_ZICOND: begin
+                            // CZERO-EQZ, CZERO-NEZ
+                            op_type = funct3[1] ? INST_OP_BITS'(INST_ALU_CZNE) : INST_OP_BITS'(INST_ALU_CZEQ);
+                            op_args.alu.xtype = ALU_TYPE_ARITH;
+                        end
+                    `endif
+                        default: begin
+                            op_type = INST_OP_BITS'(r_type);
+                            op_args.alu.xtype = ALU_TYPE_ARITH;
+                        end
+                    endcase
+                end
             end
         `ifdef XLEN_64
             INST_I_W: begin
