@@ -351,91 +351,99 @@ static inline void __intrin_aes_inv_mixcols(uint32_t *newcols, uint32_t *oldcols
 }
 
 static inline void __intrin_aes_last_enc_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
-    newcols[0] = __intrin_aes32esi(round_key[0], oldcols[0], 0);
-    newcols[0] = __intrin_aes32esi(newcols[0], oldcols[1], 1);
-    newcols[0] = __intrin_aes32esi(newcols[0], oldcols[2], 2);
-    newcols[0] = __intrin_aes32esi(newcols[0], oldcols[3], 3);
+    uint32_t o0 = oldcols[0], o1 = oldcols[1], o2 = oldcols[2], o3 = oldcols[3];
 
-    newcols[1] = __intrin_aes32esi(round_key[1], oldcols[1], 0);
-    newcols[1] = __intrin_aes32esi(newcols[1], oldcols[2], 1);
-    newcols[1] = __intrin_aes32esi(newcols[1], oldcols[3], 2);
-    newcols[1] = __intrin_aes32esi(newcols[1], oldcols[0], 3);
+    newcols[0] = __intrin_aes32esi(round_key[0], o0, 0);
+    newcols[0] = __intrin_aes32esi(newcols[0], o1, 1);
+    newcols[0] = __intrin_aes32esi(newcols[0], o2, 2);
+    newcols[0] = __intrin_aes32esi(newcols[0], o3, 3);
 
-    newcols[2] = __intrin_aes32esi(round_key[2], oldcols[2], 0);
-    newcols[2] = __intrin_aes32esi(newcols[2], oldcols[3], 1);
-    newcols[2] = __intrin_aes32esi(newcols[2], oldcols[0], 2);
-    newcols[2] = __intrin_aes32esi(newcols[2], oldcols[1], 3);
+    newcols[1] = __intrin_aes32esi(round_key[1], o1, 0);
+    newcols[1] = __intrin_aes32esi(newcols[1], o2, 1);
+    newcols[1] = __intrin_aes32esi(newcols[1], o3, 2);
+    newcols[1] = __intrin_aes32esi(newcols[1], o0, 3);
 
-    newcols[3] = __intrin_aes32esi(round_key[3], oldcols[3], 0);
-    newcols[3] = __intrin_aes32esi(newcols[3], oldcols[0], 1);
-    newcols[3] = __intrin_aes32esi(newcols[3], oldcols[1], 2);
-    newcols[3] = __intrin_aes32esi(newcols[3], oldcols[2], 3);
+    newcols[2] = __intrin_aes32esi(round_key[2], o2, 0);
+    newcols[2] = __intrin_aes32esi(newcols[2], o3, 1);
+    newcols[2] = __intrin_aes32esi(newcols[2], o0, 2);
+    newcols[2] = __intrin_aes32esi(newcols[2], o1, 3);
+
+    newcols[3] = __intrin_aes32esi(round_key[3], o3, 0);
+    newcols[3] = __intrin_aes32esi(newcols[3], o0, 1);
+    newcols[3] = __intrin_aes32esi(newcols[3], o1, 2);
+    newcols[3] = __intrin_aes32esi(newcols[3], o2, 3);
 }
 
 static inline void __intrin_aes_enc_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
-    newcols[0] = __intrin_aes32esmi(round_key[0], oldcols[0], 0);
-    newcols[0] = __intrin_aes32esmi(newcols[0], oldcols[1], 1);
-    newcols[0] = __intrin_aes32esmi(newcols[0], oldcols[2], 2);
-    newcols[0] = __intrin_aes32esmi(newcols[0], oldcols[3], 3);
+    uint32_t o0 = oldcols[0], o1 = oldcols[1], o2 = oldcols[2], o3 = oldcols[3];
 
-    newcols[1] = __intrin_aes32esmi(round_key[1], oldcols[1], 0);
-    newcols[1] = __intrin_aes32esmi(newcols[1], oldcols[2], 1);
-    newcols[1] = __intrin_aes32esmi(newcols[1], oldcols[3], 2);
-    newcols[1] = __intrin_aes32esmi(newcols[1], oldcols[0], 3);
+    newcols[0] = __intrin_aes32esmi(round_key[0], o0, 0);
+    newcols[0] = __intrin_aes32esmi(newcols[0], o1, 1);
+    newcols[0] = __intrin_aes32esmi(newcols[0], o2, 2);
+    newcols[0] = __intrin_aes32esmi(newcols[0], o3, 3);
 
-    newcols[2] = __intrin_aes32esmi(round_key[2], oldcols[2], 0);
-    newcols[2] = __intrin_aes32esmi(newcols[2], oldcols[3], 1);
-    newcols[2] = __intrin_aes32esmi(newcols[2], oldcols[0], 2);
-    newcols[2] = __intrin_aes32esmi(newcols[2], oldcols[1], 3);
+    newcols[1] = __intrin_aes32esmi(round_key[1], o1, 0);
+    newcols[1] = __intrin_aes32esmi(newcols[1], o2, 1);
+    newcols[1] = __intrin_aes32esmi(newcols[1], o3, 2);
+    newcols[1] = __intrin_aes32esmi(newcols[1], o0, 3);
 
-    newcols[3] = __intrin_aes32esmi(round_key[3], oldcols[3], 0);
-    newcols[3] = __intrin_aes32esmi(newcols[3], oldcols[0], 1);
-    newcols[3] = __intrin_aes32esmi(newcols[3], oldcols[1], 2);
-    newcols[3] = __intrin_aes32esmi(newcols[3], oldcols[2], 3);
+    newcols[2] = __intrin_aes32esmi(round_key[2], o2, 0);
+    newcols[2] = __intrin_aes32esmi(newcols[2], o3, 1);
+    newcols[2] = __intrin_aes32esmi(newcols[2], o0, 2);
+    newcols[2] = __intrin_aes32esmi(newcols[2], o1, 3);
+
+    newcols[3] = __intrin_aes32esmi(round_key[3], o3, 0);
+    newcols[3] = __intrin_aes32esmi(newcols[3], o0, 1);
+    newcols[3] = __intrin_aes32esmi(newcols[3], o1, 2);
+    newcols[3] = __intrin_aes32esmi(newcols[3], o2, 3);
 }
 
 static inline void __intrin_aes_last_dec_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
-    newcols[0] = __intrin_aes32dsi(round_key[0], oldcols[0], 0);
-    newcols[0] = __intrin_aes32dsi(newcols[0], oldcols[3], 1);
-    newcols[0] = __intrin_aes32dsi(newcols[0], oldcols[2], 2);
-    newcols[0] = __intrin_aes32dsi(newcols[0], oldcols[1], 3);
+    uint32_t o0 = oldcols[0], o1 = oldcols[1], o2 = oldcols[2], o3 = oldcols[3];
 
-    newcols[1] = __intrin_aes32dsi(round_key[1], oldcols[1], 0);
-    newcols[1] = __intrin_aes32dsi(newcols[1], oldcols[0], 1);
-    newcols[1] = __intrin_aes32dsi(newcols[1], oldcols[3], 2);
-    newcols[1] = __intrin_aes32dsi(newcols[1], oldcols[2], 3);
+    newcols[0] = __intrin_aes32dsi(round_key[0], o0, 0);
+    newcols[0] = __intrin_aes32dsi(newcols[0], o3, 1);
+    newcols[0] = __intrin_aes32dsi(newcols[0], o2, 2);
+    newcols[0] = __intrin_aes32dsi(newcols[0], o1, 3);
 
-    newcols[2] = __intrin_aes32dsi(round_key[2], oldcols[2], 0);
-    newcols[2] = __intrin_aes32dsi(newcols[2], oldcols[1], 1);
-    newcols[2] = __intrin_aes32dsi(newcols[2], oldcols[0], 2);
-    newcols[2] = __intrin_aes32dsi(newcols[2], oldcols[3], 3);
+    newcols[1] = __intrin_aes32dsi(round_key[1], o1, 0);
+    newcols[1] = __intrin_aes32dsi(newcols[1], o0, 1);
+    newcols[1] = __intrin_aes32dsi(newcols[1], o3, 2);
+    newcols[1] = __intrin_aes32dsi(newcols[1], o2, 3);
 
-    newcols[3] = __intrin_aes32dsi(round_key[3], oldcols[3], 0);
-    newcols[3] = __intrin_aes32dsi(newcols[3], oldcols[2], 1);
-    newcols[3] = __intrin_aes32dsi(newcols[3], oldcols[1], 2);
-    newcols[3] = __intrin_aes32dsi(newcols[3], oldcols[0], 3);
+    newcols[2] = __intrin_aes32dsi(round_key[2], o2, 0);
+    newcols[2] = __intrin_aes32dsi(newcols[2], o1, 1);
+    newcols[2] = __intrin_aes32dsi(newcols[2], o0, 2);
+    newcols[2] = __intrin_aes32dsi(newcols[2], o3, 3);
+
+    newcols[3] = __intrin_aes32dsi(round_key[3], o3, 0);
+    newcols[3] = __intrin_aes32dsi(newcols[3], o2, 1);
+    newcols[3] = __intrin_aes32dsi(newcols[3], o1, 2);
+    newcols[3] = __intrin_aes32dsi(newcols[3], o0, 3);
 }
 
 static inline void __intrin_aes_dec_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
-    newcols[0] = __intrin_aes32dsmi(round_key[0], oldcols[0], 0);
-    newcols[0] = __intrin_aes32dsmi(newcols[0], oldcols[3], 1);
-    newcols[0] = __intrin_aes32dsmi(newcols[0], oldcols[2], 2);
-    newcols[0] = __intrin_aes32dsmi(newcols[0], oldcols[1], 3);
+    uint32_t o0 = oldcols[0], o1 = oldcols[1], o2 = oldcols[2], o3 = oldcols[3];
 
-    newcols[1] = __intrin_aes32dsmi(round_key[1], oldcols[1], 0);
-    newcols[1] = __intrin_aes32dsmi(newcols[1], oldcols[0], 1);
-    newcols[1] = __intrin_aes32dsmi(newcols[1], oldcols[3], 2);
-    newcols[1] = __intrin_aes32dsmi(newcols[1], oldcols[2], 3);
+    newcols[0] = __intrin_aes32dsmi(round_key[0], o0, 0);
+    newcols[0] = __intrin_aes32dsmi(newcols[0], o3, 1);
+    newcols[0] = __intrin_aes32dsmi(newcols[0], o2, 2);
+    newcols[0] = __intrin_aes32dsmi(newcols[0], o1, 3);
 
-    newcols[2] = __intrin_aes32dsmi(round_key[2], oldcols[2], 0);
-    newcols[2] = __intrin_aes32dsmi(newcols[2], oldcols[1], 1);
-    newcols[2] = __intrin_aes32dsmi(newcols[2], oldcols[0], 2);
-    newcols[2] = __intrin_aes32dsmi(newcols[2], oldcols[3], 3);
+    newcols[1] = __intrin_aes32dsmi(round_key[1], o1, 0);
+    newcols[1] = __intrin_aes32dsmi(newcols[1], o0, 1);
+    newcols[1] = __intrin_aes32dsmi(newcols[1], o3, 2);
+    newcols[1] = __intrin_aes32dsmi(newcols[1], o2, 3);
 
-    newcols[3] = __intrin_aes32dsmi(round_key[3], oldcols[3], 0);
-    newcols[3] = __intrin_aes32dsmi(newcols[3], oldcols[2], 1);
-    newcols[3] = __intrin_aes32dsmi(newcols[3], oldcols[1], 2);
-    newcols[3] = __intrin_aes32dsmi(newcols[3], oldcols[0], 3);
+    newcols[2] = __intrin_aes32dsmi(round_key[2], o2, 0);
+    newcols[2] = __intrin_aes32dsmi(newcols[2], o1, 1);
+    newcols[2] = __intrin_aes32dsmi(newcols[2], o0, 2);
+    newcols[2] = __intrin_aes32dsmi(newcols[2], o3, 3);
+
+    newcols[3] = __intrin_aes32dsmi(round_key[3], o3, 0);
+    newcols[3] = __intrin_aes32dsmi(newcols[3], o2, 1);
+    newcols[3] = __intrin_aes32dsmi(newcols[3], o1, 2);
+    newcols[3] = __intrin_aes32dsmi(newcols[3], o0, 3);
 }
 
 // Returns 1 if every active lane’s predicate is true, 0 otherwise.
