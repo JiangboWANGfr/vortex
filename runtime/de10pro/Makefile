@@ -5,7 +5,7 @@ DESTDIR ?= $(CURDIR)/..
 
 CONFIG_FILE := $(DESTDIR)/de10pro_config.stamp
 SRC_DIR := $(VORTEX_HOME)/runtime/de10pro
-TERASIC_PCIE_LIB_DIR ?= $(abspath $(ROOT_DIR)/../PCIe_SW_KIT/Linux/PCIe_Library)
+TERASIC_PCIE_LIB_DIR ?= $(abspath $(ROOT_DIR)/../PCIe_SW_KIT/PCIe_Library)
 
 CXXFLAGS += -std=c++17 -Wall -Wextra -pedantic -Wfatal-errors
 CXXFLAGS += -I$(INC_DIR) -I$(ROOT_DIR)/hw -I$(DESTDIR) -I$(SW_COMMON_DIR) -I$(RT_COMMON_DIR)
