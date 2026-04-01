@@ -16,6 +16,7 @@
 #include <dlfcn.h>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 
 namespace {
 
@@ -58,7 +59,7 @@ int drv_init(de10pro_drv_api_t* drv_funcs) {
   if (drv_funcs == nullptr)
     return -1;
 
-  const char* so_path = getenv("TERASIC_PCIE_SO_PATH");
+  const char* so_path = std::getenv("TERASIC_PCIE_SO_PATH");
   if (so_path == nullptr || so_path[0] == '\0') {
     so_path = "terasic_pcie_qsys.so";
   }
