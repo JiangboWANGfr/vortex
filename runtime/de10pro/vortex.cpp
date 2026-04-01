@@ -257,7 +257,6 @@ public:
 
     std::vector<uint8_t> scratch;
     auto* src = reinterpret_cast<const uint8_t*>(host_ptr);
-    auto ls_shift = uint64_t(CACHE_BLOCK_SHIFT);
 
     for (uint64_t offset = 0; offset < size;) {
       auto chunk_bytes = std::min(staging_size_, size - offset);
@@ -270,25 +269,9 @@ public:
         dma_src = scratch.data();
       }
 
-      CHECK_PCIE(api_.PCIE_DmaWrite(pcie_, staging_addr_, const_cast<void*>(dma_src),
+      CHECK_PCIE(api_.PCIE_DmaWrite(pcie_, dev_addr + offset, const_cast<void*>(dma_src),
                                     static_cast<uint32_t>(chunk_dma_bytes)), {
         return -1;
-      });
-
-      CHECK_ERR(mmio_write64(AFU_IMAGE_MMIO_CMD_ARG0, staging_addr_ >> ls_shift), {
-        return err;
-      });
-      CHECK_ERR(mmio_write64(AFU_IMAGE_MMIO_CMD_ARG1, (dev_addr + offset) >> ls_shift), {
-        return err;
-      });
-      CHECK_ERR(mmio_write64(AFU_IMAGE_MMIO_CMD_ARG2, chunk_dma_bytes >> ls_shift), {
-        return err;
-      });
-      CHECK_ERR(mmio_write32(AFU_IMAGE_MMIO_CMD_TYPE, CMD_MEM_WRITE), {
-        return err;
-      });
-      CHECK_ERR(this->ready_wait(VX_MAX_TIMEOUT), {
-        return err;
       });
 
       offset += chunk_bytes;
@@ -311,37 +294,20 @@ public:
 
     std::vector<uint8_t> scratch;
     auto* dst = reinterpret_cast<uint8_t*>(host_ptr);
-    auto ls_shift = uint64_t(CACHE_BLOCK_SHIFT);
 
     for (uint64_t offset = 0; offset < size;) {
       auto chunk_bytes = std::min(staging_size_, size - offset);
       auto chunk_dma_bytes = aligned_size(chunk_bytes, CACHE_BLOCK_SIZE);
 
-      CHECK_ERR(mmio_write64(AFU_IMAGE_MMIO_CMD_ARG0, staging_addr_ >> ls_shift), {
-        return err;
-      });
-      CHECK_ERR(mmio_write64(AFU_IMAGE_MMIO_CMD_ARG1, (dev_addr + offset) >> ls_shift), {
-        return err;
-      });
-      CHECK_ERR(mmio_write64(AFU_IMAGE_MMIO_CMD_ARG2, chunk_dma_bytes >> ls_shift), {
-        return err;
-      });
-      CHECK_ERR(mmio_write32(AFU_IMAGE_MMIO_CMD_TYPE, CMD_MEM_READ), {
-        return err;
-      });
-      CHECK_ERR(this->ready_wait(VX_MAX_TIMEOUT), {
-        return err;
-      });
-
       if (chunk_dma_bytes != chunk_bytes) {
         scratch.resize(chunk_dma_bytes);
-        CHECK_PCIE(api_.PCIE_DmaRead(pcie_, staging_addr_, scratch.data(),
+        CHECK_PCIE(api_.PCIE_DmaRead(pcie_, dev_addr + offset, scratch.data(),
                                      static_cast<uint32_t>(chunk_dma_bytes)), {
           return -1;
         });
         std::memcpy(dst + offset, scratch.data(), chunk_bytes);
       } else {
-        CHECK_PCIE(api_.PCIE_DmaRead(pcie_, staging_addr_, dst + offset,
+        CHECK_PCIE(api_.PCIE_DmaRead(pcie_, dev_addr + offset, dst + offset,
                                      static_cast<uint32_t>(chunk_dma_bytes)), {
           return -1;
         });
