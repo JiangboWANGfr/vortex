@@ -243,6 +243,10 @@ public:
     return 0;
   }
 
+  uint64_t to_local_addr(uint64_t dev_addr) const {
+    return staging_addr_ + dev_addr;
+  }
+
   int upload(uint64_t dev_addr, const void* host_ptr, uint64_t size) {
     if (!is_aligned(dev_addr, CACHE_BLOCK_SIZE))
       return -1;
@@ -269,7 +273,7 @@ public:
         dma_src = scratch.data();
       }
 
-      CHECK_PCIE(api_.PCIE_DmaWrite(pcie_, dev_addr + offset, const_cast<void*>(dma_src),
+      CHECK_PCIE(api_.PCIE_DmaWrite(pcie_, to_local_addr(dev_addr + offset), const_cast<void*>(dma_src),
                                     static_cast<uint32_t>(chunk_dma_bytes)), {
         return -1;
       });
@@ -301,13 +305,13 @@ public:
 
       if (chunk_dma_bytes != chunk_bytes) {
         scratch.resize(chunk_dma_bytes);
-        CHECK_PCIE(api_.PCIE_DmaRead(pcie_, dev_addr + offset, scratch.data(),
+        CHECK_PCIE(api_.PCIE_DmaRead(pcie_, to_local_addr(dev_addr + offset), scratch.data(),
                                      static_cast<uint32_t>(chunk_dma_bytes)), {
           return -1;
         });
         std::memcpy(dst + offset, scratch.data(), chunk_bytes);
       } else {
-        CHECK_PCIE(api_.PCIE_DmaRead(pcie_, dev_addr + offset, dst + offset,
+        CHECK_PCIE(api_.PCIE_DmaRead(pcie_, to_local_addr(dev_addr + offset), dst + offset,
                                      static_cast<uint32_t>(chunk_dma_bytes)), {
           return -1;
         });
