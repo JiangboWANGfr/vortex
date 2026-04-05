@@ -2,9 +2,9 @@ ROOT_DIR := $(realpath ..)
 include $(ROOT_DIR)/config.mk
 
 ifeq ($(XLEN),64)
-CFLAGS += -march=rv64imafd -mabi=lp64d
+CFLAGS += -march=rv64imafd_zicsr -mabi=lp64d
 else
-CFLAGS += -march=rv32imaf -mabi=ilp32f
+CFLAGS += -march=rv32imaf_zicsr -mabi=ilp32f
 endif
 
 INC_DIR := $(VORTEX_HOME)/kernel/include

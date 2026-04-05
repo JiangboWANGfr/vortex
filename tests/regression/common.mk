@@ -10,16 +10,16 @@ VORTEX_KN_PATH ?= $(ROOT_DIR)/kernel
 
 ifeq ($(XLEN),64)
 	ifeq ($(EXT_V_ENABLE),1)
-		VX_CFLAGS += -march=rv64imafdv_zve64d -mabi=lp64d # vector extension
+		VX_CFLAGS += -march=rv64imafdv_zve64d_zicsr -mabi=lp64d # vector extension
 	else
-		VX_CFLAGS += -march=rv64imafd -mabi=lp64d
+		VX_CFLAGS += -march=rv64imafd_zicsr -mabi=lp64d
 	endif
 	STARTUP_ADDR ?= 0x180000000
 else
 	ifeq ($(EXT_V_ENABLE),1)
-		VX_CFLAGS += -march=rv32imafv_zve32f -mabi=ilp32f # vector extension
+		VX_CFLAGS += -march=rv32imafv_zve32f_zicsr -mabi=ilp32f # vector extension
 	else
-		VX_CFLAGS += -march=rv32imaf -mabi=ilp32f
+		VX_CFLAGS += -march=rv32imaf_zicsr -mabi=ilp32f
 	endif
 	STARTUP_ADDR ?= 0x80000000
 endif
@@ -108,7 +108,7 @@ run-opae: $(PROJECT) kernel.vxbin
 	SCOPE_JSON_PATH=$(VORTEX_RT_PATH)/scope.json OPAE_DRV_PATHS=$(OPAE_DRV_PATHS) LD_LIBRARY_PATH=$(VORTEX_RT_PATH):$(LD_LIBRARY_PATH) VORTEX_DRIVER=opae ./$(PROJECT) $(OPTS)
 
 run-de10pro: $(PROJECT) kernel.vxbin
-	LD_LIBRARY_PATH=$(ROOT_DIR)/../PCIe_SW_KIT/PCIe_Library:$(VORTEX_RT_PATH):$(LD_LIBRARY_PATH) VORTEX_DRIVER=de10pro ./$(PROJECT) $(OPTS)
+	LD_LIBRARY_PATH=$(ROOT_DIR)/../PCIe_SW_KIT/Linux/PCIe_Library:$(VORTEX_RT_PATH):$(LD_LIBRARY_PATH) VORTEX_DRIVER=de10pro ./$(PROJECT) $(OPTS)
 
 run-xrt: $(PROJECT) kernel.vxbin
 ifeq ($(TARGET), hw)
