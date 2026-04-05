@@ -16,11 +16,11 @@ module vortex_shell #(
     parameter C_CTRL_ADDR_WIDTH = 64,
     parameter C_CTRL_DATA_WIDTH = 32,
     parameter C_MEM_ADDR_WIDTH  = 64,
-    parameter C_MEM_DATA_WIDTH  = 256,
-    parameter C_MEM_BURST_WIDTH = 5
+    parameter C_MEM_DATA_WIDTH  = 512,
+    parameter C_MEM_BURST_WIDTH = 1
 ) (
     input  wire                             clk,
-    input  wire                             reset_n,
+    input  wire                             reset,
 
     // Avalon-MM control slave, intended to connect to DUT.rxm_bar4.
     input  wire                             ctrl_chipselect,
@@ -44,7 +44,6 @@ module vortex_shell #(
     input  wire                             vx_mem_waitrequest,
     input  wire                             vx_mem_readdatavalid
 );
-    wire reset = ~reset_n;
     wire afu_ctrl_read  = ctrl_chipselect && ctrl_read;
     wire afu_ctrl_write = ctrl_chipselect && ctrl_write;
 
@@ -58,7 +57,9 @@ module vortex_shell #(
     wire [C_MEM_BURST_WIDTH-1:0]  afu_avs_burstcount [0:0];
     wire                          afu_avs_readdatavalid [0:0];
 
-    assign vx_mem_address            = afu_avs_address[0];
+    // assign vx_mem_address            = afu_avs_address[0];
+    localparam C_MEM_ADDR_SHIFT = $clog2(C_MEM_DATA_WIDTH / 8);
+    assign vx_mem_address = C_MEM_ADDR_WIDTH'(afu_avs_address[0]) << C_MEM_ADDR_SHIFT;
     assign vx_mem_read               = afu_avs_read[0];
     assign vx_mem_write              = afu_avs_write[0];
     assign vx_mem_writedata          = afu_avs_writedata[0];

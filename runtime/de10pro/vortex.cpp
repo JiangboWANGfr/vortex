@@ -67,6 +67,15 @@ uint32_t env_u32(const char* name, uint32_t default_value) {
   return static_cast<uint32_t>(env_u64(name, default_value));
 }
 
+const char* state_name(uint32_t state) {
+  switch (state) {
+  case 0: return "IDLE";
+  case 1: return "INIT";
+  case 2: return "RUN";
+  default: return "?";
+  }
+}
+
 } // namespace
 
 class vx_device {
@@ -344,12 +353,16 @@ public:
   }
 
   int ready_wait(uint64_t timeout) {
+    timeout = env_u64("DE10PRO_VX_TIMEOUT_MS", timeout);
+    auto verbose_status = env_u32("DE10PRO_VX_VERBOSE_STATUS", 0) != 0;
     std::unordered_map<uint32_t, std::stringstream> print_bufs;
 
     struct timespec sleep_time;
     sleep_time.tv_sec = 0;
     sleep_time.tv_nsec = 1000000;
     uint64_t sleep_time_ms = (sleep_time.tv_sec * 1000) + (sleep_time.tv_nsec / 1000000);
+    uint32_t last_state = 0xffffffffu;
+    uint64_t elapsed_ms = 0;
 
     for (;;) {
       uint64_t status;
@@ -376,6 +389,12 @@ public:
       }
 
       uint32_t state = status & ((1u << STATUS_STATE_BITS) - 1);
+      if (verbose_status && state != last_state) {
+        std::cout << "[VXDRV] status state=" << state_name(state)
+                  << " (" << state << "), status=0x"
+                  << std::hex << status << std::dec << std::endl;
+        last_state = state;
+      }
       if (state == 0 || timeout == 0) {
         for (auto& buf : print_bufs) {
           auto str = buf.second.str();
@@ -384,7 +403,10 @@ public:
           }
         }
         if (state != 0) {
-          fprintf(stdout, "[VXDRV] ready-wait timed out: state=%u\n", state);
+          fprintf(stdout, "[VXDRV] ready-wait timed out: state=%s(%u), elapsed=%llu ms, status=0x%llx\n",
+                  state_name(state), state,
+                  (unsigned long long)elapsed_ms,
+                  (unsigned long long)status);
           return -1;
         }
         break;
@@ -392,6 +414,7 @@ public:
 
       nanosleep(&sleep_time, nullptr);
       timeout -= sleep_time_ms;
+      elapsed_ms += sleep_time_ms;
     }
 
     return 0;
