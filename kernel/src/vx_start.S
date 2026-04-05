@@ -22,6 +22,7 @@
 _start:
 
   # initialize per-thread registers
+#ifndef VX_FORCE_SINGLE_WARP
   csrr  t0, VX_CSR_NUM_WARPS  # get num warps
   la    t1, init_regs_all
   .insn r RISCV_CUSTOM0, 1, 0, x0, t0, t1  # wspawn t0, t1
@@ -30,8 +31,12 @@ _start:
   jal   init_regs
   li    t0, 1
   .insn r RISCV_CUSTOM0, 0, 0, x0, t0, x0  # tmc t0
+#else
+  jal   init_regs
+#endif
 
   # initialize TLS for all warps
+#ifndef VX_FORCE_SINGLE_WARP
   csrr  t0, VX_CSR_NUM_WARPS  # get num warps
   la    t1, init_tls_all
   .insn r RISCV_CUSTOM0, 1, 0, x0, t0, t1  # wspawn t0, t1
@@ -40,6 +45,9 @@ _start:
   call  __init_tls
   li    t0, 1
   .insn r RISCV_CUSTOM0, 0, 0, x0, t0, x0  # tmc t0
+#else
+  call  __init_tls
+#endif
 
   # clear BSS segment
   la    a0, _edata
