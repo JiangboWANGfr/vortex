@@ -108,6 +108,13 @@ make -s
 ./ci/blackbox.sh --cores=2 --app=vecadd
 ```
 
+### Regression runner for common apps
+
+For repeated bring-up/testing of `basic`, `demo`, `aes_smoke`, and `aes256` on `simx`, `rtlsim`, or `de10pro`, see:
+
+- [README_REGRESSION_RUNNER.md](README_REGRESSION_RUNNER.md)
+- [README_DE10PRO_XLEN.md](README_DE10PRO_XLEN.md)
+
 ### Common Developer Tips
 - Installing Vortex kernel and runtime libraries to use with external tools requires passing --prefix=<install-path> to the configure script.
 ```sh
