@@ -193,26 +193,6 @@ int vx_spawn_threads(uint32_t dimension,
   uint32_t threads_per_warp = vx_num_threads();
   uint32_t core_id = vx_core_id();
 
-#ifdef VX_FORCE_SINGLE_WARP
-  __warps_per_group = 0;
-  __local_group_id = 0;
-  threadIdx.x = 0;
-  threadIdx.y = 0;
-  threadIdx.z = 0;
-
-  if (core_id != 0)
-    return 0;
-
-  for (uint32_t task_id = 0; task_id < num_groups; ++task_id) {
-    blockIdx.x = task_id % gridDim.x;
-    blockIdx.y = (task_id / gridDim.x) % gridDim.y;
-    blockIdx.z = task_id / (gridDim.x * gridDim.y);
-    kernel_func((void*)arg);
-  }
-
-  return 0;
-#endif
-
   // check group size
   uint32_t threads_per_core = warps_per_core * threads_per_warp;
   if (threads_per_core < group_size) {
