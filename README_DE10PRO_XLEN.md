@@ -33,7 +33,86 @@ Therefore:
 - Quartus project: `/home/jiangbowang/aphd2026/PCIE_test/PCIE_DDR4_Vortex`
 - PCIe runtime library path used at runtime: `/home/jiangbowang/aphd2026/myvortex/PCIe_SW_KIT/Linux/PCIe_Library`
 
-## 3. Toolchain Environment
+## 3. What `kernel` and `runtime` Mean
+
+The `kernel` and `runtime` folders serve different layers of the system.
+
+### 3.1 `kernel/`: device-side runtime and startup code
+
+The `kernel` folder contains code that runs on the Vortex device itself.
+
+Typical responsibilities:
+
+- Device-side startup and exit code
+- Thread spawn helpers
+- Device-side printing and syscalls
+- Kernel-side support library linked into `kernel.elf`
+
+Examples:
+
+- [`kernel/src/vx_start.S`](kernel/src/vx_start.S)
+- [`kernel/src/vx_spawn.c`](kernel/src/vx_spawn.c)
+- [`kernel/src/vx_print.c`](kernel/src/vx_print.c)
+- [`kernel/src/vx_syscalls.c`](kernel/src/vx_syscalls.c)
+
+When a regression test builds:
+
+- [`tests/regression/basic/kernel.cpp`](tests/regression/basic/kernel.cpp)
+- [`tests/regression/demo/kernel.cpp`](tests/regression/demo/kernel.cpp)
+
+these files are compiled into:
+
+- `kernel.elf`
+- `kernel.vxbin`
+
+That image is uploaded to the device and executed there.
+
+### 3.2 `runtime/`: host-side driver abstraction
+
+The `runtime` folder contains code that runs on the host machine.
+
+Typical responsibilities:
+
+- Open the selected backend device
+- Allocate device memory
+- Upload kernel images and arguments
+- Start execution
+- Wait for completion
+- Download results
+
+Examples:
+
+- [`runtime/include/vortex.h`](runtime/include/vortex.h)
+- [`runtime/de10pro/vortex.cpp`](runtime/de10pro/vortex.cpp)
+- [`runtime/simx/vortex.cpp`](runtime/simx/vortex.cpp)
+
+The host regression programs:
+
+- [`tests/regression/basic/main.cpp`](tests/regression/basic/main.cpp)
+- [`tests/regression/demo/main.cpp`](tests/regression/demo/main.cpp)
+
+call the runtime API. The runtime then dispatches to a backend such as:
+
+- `de10pro`
+- `simx`
+- `rtlsim`
+
+### 3.3 How they work together
+
+Running a test such as `./demo -n1` involves both layers:
+
+1. The host program starts and calls the runtime API.
+2. The runtime opens the selected backend, such as `de10pro`.
+3. The runtime uploads `kernel.vxbin` and kernel arguments.
+4. The Vortex device executes the uploaded kernel image.
+5. The runtime waits for completion and copies results back.
+
+Short version:
+
+- `kernel/` is device-side code.
+- `runtime/` is host-side control code.
+
+## 4. Toolchain Environment
 
 The generated environment script is in the build directory, not in the source tree root.
 
@@ -62,11 +141,11 @@ to `PATH`.
 
 Without sourcing this file, targets that rely on `verilator` may fail with "command not found".
 
-## 4. Current Board Workflow: Use 32-bit Software
+## 5. Current Board Workflow: Use 32-bit Software
 
 This is the recommended workflow if you want to keep using the current bitstream.
 
-### 4.1 Create a 32-bit build directory
+### 5.1 Create a 32-bit build directory
 
 ```bash
 cd /home/jiangbowang/aphd2026/myvortex
@@ -76,7 +155,7 @@ cd build32
 source ./ci/toolchain_env.sh
 ```
 
-### 4.2 Generate hardware config headers
+### 5.2 Generate hardware config headers
 
 ```bash
 cd /home/jiangbowang/aphd2026/myvortex/build32/hw
@@ -88,14 +167,14 @@ This generates:
 - [`build32/hw/VX_config.h`](build32/hw/VX_config.h)
 - [`build32/hw/VX_types.h`](build32/hw/VX_types.h)
 
-### 4.3 Build the 32-bit kernel runtime
+### 5.3 Build the 32-bit kernel runtime
 
 ```bash
 cd /home/jiangbowang/aphd2026/myvortex/build32/kernel
 make clean all EXT_F_DISABLE=1 EXT_D_DISABLE=1
 ```
 
-### 4.4 Build the 32-bit DE10-Pro runtime
+### 5.4 Build the 32-bit DE10-Pro runtime
 Build the host-side runtime base library:
 
 ```bash
@@ -114,7 +193,7 @@ This produces:
 
 - [`build32/runtime/libvortex-de10pro.so`](build32/runtime/libvortex-de10pro.so)
 
-### 4.5 Optional: build the 32-bit SimX runtime
+### 5.5 Optional: build the 32-bit SimX runtime
 
 ```bash
 cd /home/jiangbowang/aphd2026/myvortex/build32/runtime/simx
@@ -130,7 +209,7 @@ This produces:
 
 - [`build32/runtime/libvortex-simx.so`](build32/runtime/libvortex-simx.so)
 
-### 4.6 Build and run `basic_diag`
+### 5.6 Build and run `basic_diag`
 
 Build:
 
@@ -156,7 +235,7 @@ DE10PRO_VX_STAGING_SIZE=0x200000 \
 ./basic_diag -t1 -n128
 ```
 
-### 4.7 Build and run `demo`
+### 5.7 Build and run `demo`
 
 Build:
 
@@ -184,11 +263,11 @@ DE10PRO_VX_STAGING_SIZE=0x200000 \
 
 This configuration has been validated to pass.
 
-## 5. Rebuilding Hardware as True 64-bit
+## 6. Rebuilding Hardware as True 64-bit
 
 If the goal is to run RV64 software, the hardware project must explicitly define `XLEN_64`.
 
-### 5.1 Update Quartus macros
+### 6.1 Update Quartus macros
 
 Edit:
 
@@ -209,7 +288,7 @@ Reason:
 
 - [`VX_config.vh`](hw/rtl/VX_config.vh) checks this with `` `ifdef XLEN_64 ``.
 
-### 5.2 Keep F/D disabled at first
+### 6.2 Keep F/D disabled at first
 
 Do not enable floating point yet unless you also regenerate and integrate the required Altera FPU IPs.
 
@@ -218,7 +297,7 @@ For first 64-bit bring-up, keep:
 - `EXT_F_DISABLE=1`
 - `EXT_D_DISABLE=1`
 
-### 5.3 Recompile and reflash hardware
+### 6.3 Recompile and reflash hardware
 
 After editing `DE10_Pro.qsf`:
 
@@ -226,7 +305,7 @@ After editing `DE10_Pro.qsf`:
 2. Program the new `sof`
 3. Reboot or reinitialize the board as needed
 
-### 5.4 Build a 64-bit software tree
+### 6.4 Build a 64-bit software tree
 
 ```bash
 cd /home/jiangbowang/aphd2026/myvortex
@@ -317,7 +396,7 @@ Expected result after the hardware has really been rebuilt as 64-bit:
 - `basic` should pass under `build64`
 - `demo` should pass under `build64`
 
-## 6. Can `runtime/make all` be used?
+## 7. Can `runtime/make all` be used?
 
 Yes, but with caveats.
 
@@ -359,7 +438,7 @@ and optionally:
 make -C runtime/simx DEBUG=0
 ```
 
-## 7. Can top-level `make -s` from `README.md` be used?
+## 8. Can top-level `make -s` from `README.md` be used?
 
 Yes, but only when the full environment is ready.
 
@@ -392,7 +471,7 @@ Recommended rule:
 - For board debugging: use targeted `make -C ...` commands
 - For a full developer environment: use top-level `make -s` after sourcing the build-dir `toolchain_env.sh`
 
-## 8. Current Local Caveat: `DEBUG=release`
+## 9. Current Local Caveat: `DEBUG=release`
 
 In the current shell environment, `DEBUG` is set to:
 
@@ -426,7 +505,7 @@ or:
 make ... DEBUG=0
 ```
 
-## 9. Recommended Practical Workflow
+## 10. Recommended Practical Workflow
 
 For the current board image:
 
