@@ -44,6 +44,17 @@ void* memset(void* dest, int value, size_t n) {
   return dest;
 }
 
+int memcmp(const void* lhs, const void* rhs, size_t n) {
+  const unsigned char* a = (const unsigned char*)lhs;
+  const unsigned char* b = (const unsigned char*)rhs;
+  for (size_t i = 0; i < n; ++i) {
+    if (a[i] != b[i]) {
+      return (int)a[i] - (int)b[i];
+    }
+  }
+  return 0;
+}
+
 void exit(int status) {
   _Exit(status);
   __builtin_unreachable();

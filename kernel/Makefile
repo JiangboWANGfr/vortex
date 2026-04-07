@@ -43,8 +43,14 @@ CFLAGS += -I$(INC_DIR) -I$(ROOT_DIR)/hw
 CFLAGS += -DXLEN_$(XLEN)
 CFLAGS += $(CONFIGS)
 
+ifeq ($(XLEN),64)
+ifeq ($(EXT_D_DISABLE),1)
+CFLAGS += -DVX_NO_LIBC_RUNTIME -DPRINTF_DISABLE_SUPPORT_FLOAT -fno-builtin -fno-tree-loop-distribute-patterns
+endif
+else
 ifeq ($(and $(filter 1,$(EXT_F_DISABLE)),$(filter 1,$(EXT_D_DISABLE))),1)
-CFLAGS += -DVX_NO_LIBC_RUNTIME -DPRINTF_DISABLE_SUPPORT_FLOAT
+CFLAGS += -DVX_NO_LIBC_RUNTIME -DPRINTF_DISABLE_SUPPORT_FLOAT -fno-builtin -fno-tree-loop-distribute-patterns
+endif
 endif
 
 PROJECT := libvortex

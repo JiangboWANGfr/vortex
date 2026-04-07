@@ -9,5 +9,8 @@ SRCS := $(SRC_DIR)/main.cpp $(SRC_DIR)/aes256-impl.c
 
 CFLAGS += -DAES_NATIVE
 
-include ../common.mk
+ifeq ($(and $(filter 1,$(EXT_F_DISABLE)),$(filter 1,$(EXT_D_DISABLE))),1)
+USE_GCC := 1
+endif
 
+include ../common.mk

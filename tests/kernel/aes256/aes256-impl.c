@@ -323,16 +323,16 @@ static inline uint32_t rot_word(uint32_t word) {
     // specifies an rotl
     return __intrin_rotr_imm(word, 8);
 #else
-    uint32_t new;
+    uint32_t rotated_word;
     uint8_t *bytes = (uint8_t *)&word;
-    uint8_t *new_bytes = (uint8_t *)&new;
+    uint8_t *new_bytes = (uint8_t *)&rotated_word;
 
     new_bytes[0] = bytes[1];
     new_bytes[1] = bytes[2];
     new_bytes[2] = bytes[3];
     new_bytes[3] = bytes[0];
 
-    return new;
+    return rotated_word;
 #endif
 }
 
@@ -363,8 +363,8 @@ static void mix_columns(uint8_t *state) {
 
     for (int i = 0; i < Nb; i++) {
         uint8_t *col = (uint8_t *)(state_cols + i);
-        uint32_t new = 0;
-        uint8_t *new_col = (uint8_t *)&new;
+        uint32_t new_word = 0;
+        uint8_t *new_col = (uint8_t *)&new_word;
 
         // important observation: {03}.b = ({01} ^ {02}).b = b ^ {02}.b
         new_col[0] = xtime(col[0]) ^ col[1] ^ xtime(col[1]) ^ col[2] ^ col[3];
@@ -372,7 +372,7 @@ static void mix_columns(uint8_t *state) {
         new_col[2] = col[0] ^ col[1] ^ xtime(col[2]) ^ col[3] ^ xtime(col[3]);
         new_col[3] = col[0] ^ xtime(col[0]) ^ col[1] ^ col[2] ^ xtime(col[3]);
 
-        state_cols[i] = new;
+        state_cols[i] = new_word;
     }
 }
 #endif
@@ -390,23 +390,23 @@ static void inv_sub_bytes(uint8_t *state) {
 }
 
 static void shift_rows(uint8_t *state) {
-    uint8_t new[4 * Nb];
-    new[0] = state[0]; new[4] = state[4]; new[8] = state[8]; new[12] = state[12];
-    new[1] = state[5]; new[5] = state[9]; new[9] = state[13]; new[13] = state[1];
-    new[2] = state[10]; new[6] = state[14]; new[10] = state[2]; new[14] = state[6];
-    new[3] = state[15]; new[7] = state[3]; new[11] = state[7]; new[15] = state[11];
-    memcpy(state, new, 4 * Nb);
-    //copy_state(state, new);
+    uint8_t shifted[4 * Nb];
+    shifted[0] = state[0]; shifted[4] = state[4]; shifted[8] = state[8]; shifted[12] = state[12];
+    shifted[1] = state[5]; shifted[5] = state[9]; shifted[9] = state[13]; shifted[13] = state[1];
+    shifted[2] = state[10]; shifted[6] = state[14]; shifted[10] = state[2]; shifted[14] = state[6];
+    shifted[3] = state[15]; shifted[7] = state[3]; shifted[11] = state[7]; shifted[15] = state[11];
+    memcpy(state, shifted, 4 * Nb);
+    //copy_state(state, shifted);
 }
 
 static void inv_shift_rows(uint8_t *state) {
-    uint8_t new[4 * Nb];
-    new[0] = state[0]; new[4] = state[4]; new[8] = state[8]; new[12] = state[12];
-    new[1] = state[13]; new[5] = state[1]; new[9] = state[5]; new[13] = state[9];
-    new[2] = state[10]; new[6] = state[14]; new[10] = state[2]; new[14] = state[6];
-    new[3] = state[7]; new[7] = state[11]; new[11] = state[15]; new[15] = state[3];
-    memcpy(state, new, 4 * Nb);
-    //copy_state(state, new);
+    uint8_t shifted[4 * Nb];
+    shifted[0] = state[0]; shifted[4] = state[4]; shifted[8] = state[8]; shifted[12] = state[12];
+    shifted[1] = state[13]; shifted[5] = state[1]; shifted[9] = state[5]; shifted[13] = state[9];
+    shifted[2] = state[10]; shifted[6] = state[14]; shifted[10] = state[2]; shifted[14] = state[6];
+    shifted[3] = state[7]; shifted[7] = state[11]; shifted[11] = state[15]; shifted[15] = state[3];
+    memcpy(state, shifted, 4 * Nb);
+    //copy_state(state, shifted);
 }
 
 static void inv_mix_columns(uint8_t *state) {
@@ -414,8 +414,8 @@ static void inv_mix_columns(uint8_t *state) {
 
     for (int i = 0; i < Nb; i++) {
         uint8_t *col = (uint8_t *)(state_cols + i);
-        uint32_t new = 0;
-        uint8_t *new_col = (uint8_t *)&new;
+        uint32_t new_word = 0;
+        uint8_t *new_col = (uint8_t *)&new_word;
 
         uint8_t val0 = col[0];
         uint8_t xval0 = xtime(val0); // x.val = {02}.val
@@ -463,7 +463,7 @@ static void inv_mix_columns(uint8_t *state) {
                      ^ val2 ^ x3val2 // {09}.val2
                      ^ xval3 ^ x2val3 ^ x3val3; // {0e}.val3
 
-        state_cols[i] = new;
+        state_cols[i] = new_word;
     }
 }
 

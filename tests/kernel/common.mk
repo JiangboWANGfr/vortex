@@ -1,5 +1,7 @@
 ROOT_DIR := $(realpath ../../..)
 
+USE_GCC ?= 0
+
 ifeq ($(XLEN),64)
 ifeq ($(and $(filter 1,$(EXT_F_DISABLE)),$(filter 1,$(EXT_D_DISABLE))),1)
 CFLAGS += -DVX_NO_LIBC_RUNTIME -DPRINTF_DISABLE_SUPPORT_FLOAT
@@ -26,11 +28,19 @@ LLVM_CFLAGS += --sysroot=$(RISCV_SYSROOT)
 LLVM_CFLAGS += --gcc-toolchain=$(RISCV_TOOLCHAIN_PATH)
 LLVM_CFLAGS += -Xclang -target-feature -Xclang +vortex
 
+ifeq ($(USE_GCC),1)
+CC  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-gcc
+CXX = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-g++
+AR  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-gcc-ar
+DP  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-objdump
+CP  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-objcopy
+else
 CC  = $(LLVM_VORTEX)/bin/clang $(LLVM_CFLAGS)
 CXX = $(LLVM_VORTEX)/bin/clang++ $(LLVM_CFLAGS)
 AR  = $(LLVM_VORTEX)/bin/llvm-ar
 DP  = $(LLVM_VORTEX)/bin/llvm-objdump
 CP  = $(LLVM_VORTEX)/bin/llvm-objcopy
+endif
 
 CFLAGS += -O3 -mcmodel=medany -fno-exceptions -nostartfiles -nostdlib -fdata-sections -ffunction-sections
 CFLAGS += -I$(VORTEX_HOME)/kernel/include -I$(ROOT_DIR)/hw -I$(SW_COMMON_DIR)

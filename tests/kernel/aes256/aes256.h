@@ -12,7 +12,12 @@
 
 #define BLOCK_SIZE (4 * Nb)
 #define KEY_SIZE (4 * Nk)
-#define NO_XOR ((void *)-1)
+
+#ifdef __cplusplus
+#define NO_XOR reinterpret_cast<const uint8_t*>(static_cast<intptr_t>(-1))
+#else
+#define NO_XOR ((const uint8_t *)(intptr_t)-1)
+#endif
 
 #ifdef __cplusplus
 extern "C" {
