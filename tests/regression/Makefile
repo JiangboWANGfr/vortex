@@ -2,6 +2,8 @@ ROOT_DIR := $(realpath ../..)
 include $(ROOT_DIR)/config.mk
 
 all:
+	$(MAKE) -C aes_smoke
+	$(MAKE) -C aes256
 	$(MAKE) -C basic
 	$(MAKE) -C basic_diag
 	$(MAKE) -C demo
@@ -24,6 +26,8 @@ all:
 	$(MAKE) -C stencil3d
 
 run-simx:
+	$(MAKE) -C aes_smoke run-simx
+	$(MAKE) -C aes256 run-simx
 	$(MAKE) -C basic run-simx
 	$(MAKE) -C basic_diag run-simx
 	$(MAKE) -C demo run-simx
@@ -46,6 +50,8 @@ run-simx:
 	$(MAKE) -C stencil3d run-simx
 
 run-rtlsim:
+	$(MAKE) -C aes_smoke run-rtlsim
+	$(MAKE) -C aes256 run-rtlsim
 	$(MAKE) -C basic run-rtlsim
 	$(MAKE) -C basic_diag run-rtlsim
 	$(MAKE) -C demo run-rtlsim
@@ -68,6 +74,8 @@ run-rtlsim:
 	$(MAKE) -C stencil3d run-rtlsim
 
 clean:
+	$(MAKE) -C aes_smoke clean
+	$(MAKE) -C aes256 clean
 	$(MAKE) -C basic clean
 	$(MAKE) -C basic_diag clean
 	$(MAKE) -C demo clean

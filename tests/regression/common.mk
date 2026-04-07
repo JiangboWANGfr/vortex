@@ -1,6 +1,7 @@
 ROOT_DIR := $(realpath ../../..)
 
 TARGET ?= opaesim
+VX_USE_GCC ?= 0
 
 XRT_SYN_DIR ?= $(VORTEX_HOME)/hw/syn/xilinx/xrt
 XRT_DEVICE_INDEX ?= 0
@@ -9,7 +10,7 @@ VORTEX_RT_PATH ?= $(ROOT_DIR)/runtime
 VORTEX_KN_PATH ?= $(ROOT_DIR)/kernel
 
 ifeq ($(XLEN),64)
-	ifeq ($(and $(filter 1,$(EXT_F_DISABLE)),$(filter 1,$(EXT_D_DISABLE))),1)
+	ifeq ($(EXT_D_DISABLE),1)
 		VX_CFLAGS += -DVX_NO_LIBC_RUNTIME -DPRINTF_DISABLE_SUPPORT_FLOAT
 	endif
 	ifeq ($(EXT_V_ENABLE),1)
@@ -59,15 +60,17 @@ LLVM_CFLAGS += -mllvm -disable-loop-idiom-all # disable memset/memcpy loop idiom
 #LLVM_CFLAGS += -Wl,-L$(RISCV_TOOLCHAIN_PATH)/lib/gcc/$(RISCV_PREFIX)/9.2.0
 #LLVM_CFLAGS += --rtlib=libgcc
 
+ifeq ($(VX_USE_GCC),1)
+VX_CC  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-gcc
+VX_CXX = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-g++
+VX_DP  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-objdump
+VX_CP  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-objcopy
+else
 VX_CC  = $(LLVM_VORTEX)/bin/clang $(LLVM_CFLAGS)
 VX_CXX = $(LLVM_VORTEX)/bin/clang++ $(LLVM_CFLAGS)
 VX_DP  = $(LLVM_VORTEX)/bin/llvm-objdump
 VX_CP  = $(LLVM_VORTEX)/bin/llvm-objcopy
-
-#VX_CC  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-gcc
-#VX_CXX = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-g++
-#VX_DP  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-objdump
-#VX_CP  = $(RISCV_TOOLCHAIN_PATH)/bin/$(RISCV_PREFIX)-objcopy
+endif
 
 VX_CFLAGS += -O3 -mcmodel=medany -fno-rtti -fno-exceptions -nostartfiles -nostdlib -fdata-sections -ffunction-sections
 VX_CFLAGS += -I$(VORTEX_HOME)/kernel/include -I$(ROOT_DIR)/hw -I$(SW_COMMON_DIR)
@@ -75,16 +78,19 @@ VX_CFLAGS += -DXLEN_$(XLEN)
 VX_CFLAGS += -DNDEBUG
 VX_CFLAGS += $(CONFIGS)
 
-ifeq ($(and $(filter 1,$(EXT_F_DISABLE)),$(filter 1,$(EXT_D_DISABLE))),1)
-	ifeq ($(XLEN),32)
-		VX_LIBS += -lgcc
-	endif
-else
-	VX_LIBS += -L$(LIBC_VORTEX)/lib -lm -lc
-	ifeq ($(XLEN),32)
+ifeq ($(XLEN),64)
+	ifeq ($(EXT_D_DISABLE),1)
 		VX_LIBS += -lgcc
 	else
+		VX_LIBS += -L$(LIBC_VORTEX)/lib -lm -lc
 		VX_LIBS += $(LIBCRT_VORTEX)/lib/baremetal/libclang_rt.builtins-riscv$(XLEN).a
+	endif
+else
+	ifeq ($(and $(filter 1,$(EXT_F_DISABLE)),$(filter 1,$(EXT_D_DISABLE))),1)
+		VX_LIBS += -lgcc
+	else
+		VX_LIBS += -L$(LIBC_VORTEX)/lib -lm -lc
+		VX_LIBS += -lgcc
 	endif
 endif
 	#VX_LIBS += -lgcc
