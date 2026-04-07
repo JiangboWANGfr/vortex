@@ -216,7 +216,9 @@ int vx_spawn_threads(uint32_t dimension,
   // check group size
   uint32_t threads_per_core = warps_per_core * threads_per_warp;
   if (threads_per_core < group_size) {
+#ifndef VX_NO_LIBC_RUNTIME
     vx_printf("error: group_size > threads_per_core (%d,%d)\n", group_size, threads_per_core);
+#endif
     return -1;
   }
 

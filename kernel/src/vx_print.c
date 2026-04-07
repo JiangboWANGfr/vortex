@@ -14,11 +14,6 @@
 #include <vx_print.h>
 #include <vx_spawn.h>
 #include <vx_intrinsics.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <string.h>
-#include <math.h>
 #include "tinyprintf.h"
 
 #ifdef __cplusplus
@@ -41,11 +36,40 @@ typedef struct {
 	int precision;
 } putfloat_arg_t;
 
+static int local_itoa(int value, char* out, int base) {
+	static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+	unsigned int uvalue;
+	int pos = 0;
+
+	if (base < 2 || base > 36) {
+		out[0] = '\0';
+		return 0;
+	}
+
+	if (value < 0 && base == 10) {
+		out[pos++] = '-';
+		uvalue = (unsigned int)(-value);
+	} else {
+		uvalue = (unsigned int)value;
+	}
+
+	char tmp[33];
+	int tpos = 0;
+	do {
+		tmp[tpos++] = digits[uvalue % (unsigned int)base];
+		uvalue /= (unsigned int)base;
+	} while (uvalue != 0);
+
+	while (tpos > 0) {
+		out[pos++] = tmp[--tpos];
+	}
+	out[pos] = '\0';
+	return pos;
+}
+
 static void __putint_cb(const putint_arg_t* arg) {
 	char tmp[33];
-	float value = arg->value;
-	int base = arg->base;
-	itoa(value, tmp, base);
+	local_itoa(arg->value, tmp, arg->base);
 	for (int i = 0; i < 33; ++i) {
 		int c = tmp[i];
 		if (!c)
@@ -55,6 +79,13 @@ static void __putint_cb(const putint_arg_t* arg) {
 }
 
 static void __putfloat_cb(const putfloat_arg_t* arg) {
+#ifdef VX_NO_LIBC_RUNTIME
+	(void)arg;
+	const char* msg = "[float-disabled]";
+	for (int i = 0; msg[i] != '\0'; ++i) {
+		vx_putchar(msg[i]);
+	}
+#else
 	float value = arg->value;
 	int precision = arg->precision;
 	int ipart = (int)value;
@@ -65,6 +96,7 @@ static void __putfloat_cb(const putfloat_arg_t* arg) {
 		float fscaled = frac * pow(10, precision);
 		vx_putint((int)fscaled, 10);
 	}
+#endif
 }
 
 static void __vprintf_cb(printf_arg_t* arg) {

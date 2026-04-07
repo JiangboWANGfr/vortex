@@ -2,9 +2,19 @@ ROOT_DIR := $(realpath ..)
 include $(ROOT_DIR)/config.mk
 
 ifeq ($(XLEN),64)
+ifeq ($(EXT_F_DISABLE),1)
+CFLAGS += -march=rv64ima_zicsr -mabi=lp64
+else ifeq ($(EXT_D_DISABLE),1)
+CFLAGS += -march=rv64imaf_zicsr -mabi=lp64f
+else
 CFLAGS += -march=rv64imafd_zicsr -mabi=lp64d
+endif
+else
+ifeq ($(EXT_F_DISABLE),1)
+CFLAGS += -march=rv32ima_zicsr -mabi=ilp32
 else
 CFLAGS += -march=rv32imaf_zicsr -mabi=ilp32f
+endif
 endif
 
 INC_DIR := $(VORTEX_HOME)/kernel/include
@@ -32,6 +42,10 @@ CFLAGS += -O3 -mcmodel=medany -fno-exceptions -fdata-sections -ffunction-section
 CFLAGS += -I$(INC_DIR) -I$(ROOT_DIR)/hw
 CFLAGS += -DXLEN_$(XLEN)
 CFLAGS += $(CONFIGS)
+
+ifeq ($(and $(filter 1,$(EXT_F_DISABLE)),$(filter 1,$(EXT_D_DISABLE))),1)
+CFLAGS += -DVX_NO_LIBC_RUNTIME -DPRINTF_DISABLE_SUPPORT_FLOAT
+endif
 
 PROJECT := libvortex
 

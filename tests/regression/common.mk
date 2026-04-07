@@ -9,17 +9,40 @@ VORTEX_RT_PATH ?= $(ROOT_DIR)/runtime
 VORTEX_KN_PATH ?= $(ROOT_DIR)/kernel
 
 ifeq ($(XLEN),64)
+	ifeq ($(and $(filter 1,$(EXT_F_DISABLE)),$(filter 1,$(EXT_D_DISABLE))),1)
+		VX_CFLAGS += -DVX_NO_LIBC_RUNTIME -DPRINTF_DISABLE_SUPPORT_FLOAT
+	endif
 	ifeq ($(EXT_V_ENABLE),1)
-		VX_CFLAGS += -march=rv64imafdv_zve64d_zicsr -mabi=lp64d # vector extension
+		ifeq ($(EXT_F_DISABLE),1)
+			VX_CFLAGS += -march=rv64imav_zve64x_zicsr -mabi=lp64 # vector extension
+		else ifeq ($(EXT_D_DISABLE),1)
+			VX_CFLAGS += -march=rv64imafv_zve64f_zicsr -mabi=lp64f # vector extension
+		else
+			VX_CFLAGS += -march=rv64imafdv_zve64d_zicsr -mabi=lp64d # vector extension
+		endif
 	else
-		VX_CFLAGS += -march=rv64imafd_zicsr -mabi=lp64d
+		ifeq ($(EXT_F_DISABLE),1)
+			VX_CFLAGS += -march=rv64ima_zicsr -mabi=lp64
+		else ifeq ($(EXT_D_DISABLE),1)
+			VX_CFLAGS += -march=rv64imaf_zicsr -mabi=lp64f
+		else
+			VX_CFLAGS += -march=rv64imafd_zicsr -mabi=lp64d
+		endif
 	endif
 	STARTUP_ADDR ?= 0x180000000
 else
 	ifeq ($(EXT_V_ENABLE),1)
-		VX_CFLAGS += -march=rv32imafv_zve32f_zicsr -mabi=ilp32f # vector extension
+		ifeq ($(EXT_F_DISABLE),1)
+			VX_CFLAGS += -march=rv32imav_zve32x_zicsr -mabi=ilp32 # vector extension
+		else
+			VX_CFLAGS += -march=rv32imafv_zve32f_zicsr -mabi=ilp32f # vector extension
+		endif
 	else
-		VX_CFLAGS += -march=rv32imaf_zicsr -mabi=ilp32f
+		ifeq ($(EXT_F_DISABLE),1)
+			VX_CFLAGS += -march=rv32ima_zicsr -mabi=ilp32
+		else
+			VX_CFLAGS += -march=rv32imaf_zicsr -mabi=ilp32f
+		endif
 	endif
 	STARTUP_ADDR ?= 0x80000000
 endif
@@ -52,10 +75,19 @@ VX_CFLAGS += -DXLEN_$(XLEN)
 VX_CFLAGS += -DNDEBUG
 VX_CFLAGS += $(CONFIGS)
 
-VX_LIBS += -L$(LIBC_VORTEX)/lib -lm -lc
-
-VX_LIBS += $(LIBCRT_VORTEX)/lib/baremetal/libclang_rt.builtins-riscv$(XLEN).a
-#VX_LIBS += -lgcc
+ifeq ($(and $(filter 1,$(EXT_F_DISABLE)),$(filter 1,$(EXT_D_DISABLE))),1)
+	ifeq ($(XLEN),32)
+		VX_LIBS += -lgcc
+	endif
+else
+	VX_LIBS += -L$(LIBC_VORTEX)/lib -lm -lc
+	ifeq ($(XLEN),32)
+		VX_LIBS += -lgcc
+	else
+		VX_LIBS += $(LIBCRT_VORTEX)/lib/baremetal/libclang_rt.builtins-riscv$(XLEN).a
+	endif
+endif
+	#VX_LIBS += -lgcc
 
 VX_LDFLAGS += -Wl,-Bstatic,--gc-sections,-T,$(VORTEX_HOME)/kernel/scripts/link$(XLEN).ld,--defsym=STARTUP_ADDR=$(STARTUP_ADDR) $(VORTEX_KN_PATH)/libvortex.a $(VX_LIBS)
 

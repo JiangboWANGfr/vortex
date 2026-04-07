@@ -13,13 +13,47 @@
 
 #include <sys/stat.h>
 #include <newlib.h>
+#include <stddef.h>
 #include <unistd.h>
 #include <vx_intrinsics.h>
 #include <vx_print.h>
-#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+#ifdef VX_NO_LIBC_RUNTIME
+
+extern void _Exit(int status);
+
+void* memcpy(void* dest, const void* src, size_t n) {
+  unsigned char* d = (unsigned char*)dest;
+  const unsigned char* s = (const unsigned char*)src;
+  for (size_t i = 0; i < n; ++i) {
+    d[i] = s[i];
+  }
+  return dest;
+}
+
+void* memset(void* dest, int value, size_t n) {
+  unsigned char* d = (unsigned char*)dest;
+  unsigned char c = (unsigned char)value;
+  for (size_t i = 0; i < n; ++i) {
+    d[i] = c;
+  }
+  return dest;
+}
+
+void exit(int status) {
+  _Exit(status);
+  __builtin_unreachable();
+}
+
+void _exit(int status) {
+  _Exit(status);
+  __builtin_unreachable();
+}
+
 #endif
 
 int _close(int file) { return -1; }

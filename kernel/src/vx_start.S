@@ -21,6 +21,30 @@
 .type   _start, @function
 _start:
 
+#ifdef VX_NO_LIBC_RUNTIME
+
+  # initialize per-thread registers
+#ifndef VX_FORCE_SINGLE_WARP
+  csrr  t0, VX_CSR_NUM_WARPS  # get num warps
+  la    t1, init_regs_all
+  .insn r RISCV_CUSTOM0, 1, 0, x0, t0, t1  # wspawn t0, t1
+  li    t0, -1
+  .insn r RISCV_CUSTOM0, 0, 0, x0, t0, x0  # tmc t0
+  jal   init_regs
+  li    t0, 1
+  .insn r RISCV_CUSTOM0, 0, 0, x0, t0, x0  # tmc t0
+#else
+  jal   init_regs
+#endif
+
+  # call main program routine
+  call  main
+
+  # terminate program
+  tail  _Exit
+
+#else
+
   # initialize per-thread registers
 #ifndef VX_FORCE_SINGLE_WARP
   csrr  t0, VX_CSR_NUM_WARPS  # get num warps
@@ -70,6 +94,8 @@ _start:
 
   # call exit routine
   tail  exit
+
+#endif
 .size _start, .-_start
 
 .section .text
