@@ -175,7 +175,6 @@ module VX_decode import VX_gpu_pkg::*; #(
                 `USED_IREG (rd);
                 `USED_IREG (rs1);
                 `USED_IREG (rs2);
-            `ifdef EXT_AES_ENABLE
                 if (funct3 == 3'h0 && ((funct7 & 7'h19) == 7'h19)) begin
                     op_args.alu.xtype = ALU_TYPE_OTHER;
                     op_args.alu.imm = `XLEN'(funct7[6:5]);
@@ -207,28 +206,6 @@ module VX_decode import VX_gpu_pkg::*; #(
                         end
                     endcase
                 end
-            `else
-                case (funct7)
-                `ifdef EXT_M_ENABLE
-                    INST_R_F7_MUL: begin
-                        // MUL, MULH, MULHSU, MULHU
-                        op_type = INST_OP_BITS'(m_type);
-                        op_args.alu.xtype = ALU_TYPE_MULDIV;
-                    end
-                `endif
-                `ifdef EXT_ZICOND_ENABLE
-                    INST_R_F7_ZICOND: begin
-                        // CZERO-EQZ, CZERO-NEZ
-                        op_type = funct3[1] ? INST_OP_BITS'(INST_ALU_CZNE) : INST_OP_BITS'(INST_ALU_CZEQ);
-                        op_args.alu.xtype = ALU_TYPE_ARITH;
-                    end
-                `endif
-                    default: begin
-                        op_type = INST_OP_BITS'(r_type);
-                        op_args.alu.xtype = ALU_TYPE_ARITH;
-                    end
-                endcase
-            `endif
             end
         `ifdef XLEN_64
             INST_I_W: begin

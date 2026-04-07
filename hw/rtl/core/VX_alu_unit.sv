@@ -31,18 +31,11 @@ module VX_alu_unit import VX_gpu_pkg::*; #(
     localparam BLOCK_SIZE   = `NUM_ALU_BLOCKS;
     localparam NUM_LANES    = `NUM_ALU_LANES;
     localparam PARTIAL_BW   = (BLOCK_SIZE != `ISSUE_WIDTH) || (NUM_LANES != `SIMD_WIDTH);
-`ifdef EXT_AES_ENABLE
     localparam PE_COUNT     = 2 + `EXT_M_ENABLED;
     localparam PE_SEL_BITS  = `CLOG2(PE_COUNT);
     localparam PE_IDX_INT   = 0;
     localparam PE_IDX_CRY   = 1;
     localparam PE_IDX_MDV   = 2;
-`else
-    localparam PE_COUNT     = 1 + `EXT_M_ENABLED;
-    localparam PE_SEL_BITS  = `CLOG2(PE_COUNT);
-    localparam PE_IDX_INT   = 0;
-    localparam PE_IDX_MDV   = PE_IDX_INT + `EXT_M_ENABLED;
-`endif
 
     VX_execute_if #(
         .data_t (alu_exe_t)
@@ -74,21 +67,14 @@ module VX_alu_unit import VX_gpu_pkg::*; #(
         ) pe_result_if[PE_COUNT]();
 
         reg [`UP(PE_SEL_BITS)-1:0] pe_select;
-    `ifdef EXT_AES_ENABLE
         wire is_crypto = (per_block_execute_if[block_idx].data.op_args.alu.xtype == ALU_TYPE_OTHER)
                       && per_block_execute_if[block_idx].data.op_type[3];
-    `endif
         always @(*) begin
             pe_select = PE_IDX_INT;
-        `ifdef EXT_AES_ENABLE
             if (is_crypto)
                 pe_select = PE_IDX_CRY;
             else if (`EXT_M_ENABLED && (per_block_execute_if[block_idx].data.op_args.alu.xtype == ALU_TYPE_MULDIV))
                 pe_select = PE_IDX_MDV;
-        `else
-            if (`EXT_M_ENABLED && (per_block_execute_if[block_idx].data.op_args.alu.xtype == ALU_TYPE_MULDIV))
-                pe_select = PE_IDX_MDV;
-        `endif
         end
 
         VX_pe_switch #(
@@ -119,7 +105,6 @@ module VX_alu_unit import VX_gpu_pkg::*; #(
             .result_if  (pe_result_if[PE_IDX_INT])
         );
 
-    `ifdef EXT_AES_ENABLE
         VX_alu_crypto #(
             .INSTANCE_ID (`SFORMATF(("%s-crypto%0d", INSTANCE_ID, block_idx))),
             .NUM_LANES (NUM_LANES)
@@ -129,7 +114,6 @@ module VX_alu_unit import VX_gpu_pkg::*; #(
             .execute_if (pe_execute_if[PE_IDX_CRY]),
             .result_if  (pe_result_if[PE_IDX_CRY])
         );
-    `endif
 
     `ifdef EXT_M_ENABLE
         VX_alu_muldiv #(
