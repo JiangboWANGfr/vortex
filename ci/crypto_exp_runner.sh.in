@@ -35,6 +35,8 @@ Supported CRYPTO_ACCEL_MODE values in this tree:
 
 Example:
   $0 --driver=simx --accel-modes=NATIVE --op-types=4 --blocks=16 --fd-disable
+  $0 --driver=simx --accel-modes=NATIVE,SOFTWARE --op-types=0,1,2,3,4,5,6,7 --blocks=8192 --fd-disable --results=results.tsv --log-dir=crypto-exp-logs
+
 EOF
 }
 
