@@ -76,8 +76,12 @@ static inline uint32_t big_endian_add(uint32_t a, uint32_t b, int *overflow) {
                       | bytes[3];
     uint32_t sum = native + b;
     *overflow = sum < native;
-    uint8_t big_sum[4] = {(sum >> 24) & 0xff, (sum >> 16) & 0xff,
-                          (sum >> 8) & 0xff, sum & 0xff};
+    uint8_t big_sum[4] = {
+        (uint8_t)((sum >> 24) & 0xff),
+        (uint8_t)((sum >> 16) & 0xff),
+        (uint8_t)((sum >> 8) & 0xff),
+        (uint8_t)(sum & 0xff),
+    };
     uint32_t ret;
     memcpy(&ret, big_sum, sizeof(ret));
     return ret;

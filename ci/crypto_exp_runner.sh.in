@@ -1,19 +1,5 @@
 #!/bin/bash
 
-# Copyright © 2019-2023
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
@@ -21,15 +7,18 @@ ROOT_DIR=$(realpath "$SCRIPT_DIR/..")
 
 show_usage() {
     cat <<EOF
-Vortex Regression Runner
+Vortex AES Crypto Experiment Runner
 
 Usage:
   $0 [options]
 
 Options:
   --driver=<simx|rtlsim|de10pro>    Backend driver (default: simx)
-  --apps=<list|all>                 Comma-separated app list (default: all)
-  --opts=<args>                     Override runtime args for every app
+  --accel-modes=<list>              Comma-separated modes (default: NATIVE)
+  --op-types=<list>                 Comma-separated AES op ids (default: 0,1,2,3,4,5,6,7)
+  --blocks=<n>                      Blocks per hardware task (default: 8192)
+  --results=<path>                  TSV output path (default: results.tsv)
+  --log-dir=<path>                  Run log directory (default: crypto-exp-logs)
   --startup-addr=<hex>              Kernel startup address (default: 0x80000000)
   --ext-f-disable                   Build with EXT_F_DISABLE=1
   --ext-d-disable                   Build with EXT_D_DISABLE=1
@@ -37,17 +26,15 @@ Options:
   --debug=<level>                   Debug level passed to simulators (default: 0)
   --help                            Show this help
 
-Supported apps:
-  basic, demo, aes_smoke, aes256, aes256_bench
+AES op ids:
+  0 ecb-enc, 1 ecb-dec, 2 cbc-enc, 3 cbc-dec,
+  4 ctr-enc, 5 ctr-dec, 6 key-enc, 7 key-dec
 
-Notes:
-  --apps=all intentionally excludes aes256_bench. Use --apps=aes256_bench
-  for a small spot check, or ci/crypto_exp_runner.sh for TSV experiments.
+Supported CRYPTO_ACCEL_MODE values in this tree:
+  NATIVE, SOFTWARE
 
-Examples:
-  $0 --driver=simx --apps=all --fd-disable
-  $0 --driver=de10pro --apps=basic,demo --fd-disable
-  $0 --driver=rtlsim --apps=aes_smoke --fd-disable --debug=3
+Example:
+  $0 --driver=simx --accel-modes=NATIVE --op-types=4 --blocks=16 --fd-disable
 EOF
 }
 
@@ -72,37 +59,28 @@ join_flags() {
     printf '%s\n' "${result[@]}"
 }
 
-default_app_opts() {
+op_name() {
     case "$1" in
-        basic)
-            echo "-t1 -n128"
-            ;;
-        demo)
-            echo "-n1"
-            ;;
-        aes_smoke|aes256)
-            echo ""
-            ;;
-        aes256_bench)
-            echo "-n16 -t4"
-            ;;
-        *)
-            die "unsupported app: $1"
-            ;;
+        0) echo "ecb-enc" ;;
+        1) echo "ecb-dec" ;;
+        2) echo "cbc-enc" ;;
+        3) echo "cbc-dec" ;;
+        4) echo "ctr-enc" ;;
+        5) echo "ctr-dec" ;;
+        6) echo "key-enc" ;;
+        7) echo "key-dec" ;;
+        *) die "unsupported AES op type: $1" ;;
     esac
 }
 
-validate_apps() {
-    local app
-    for app in "${APPS[@]}"; do
-        case "$app" in
-            basic|demo|aes_smoke|aes256|aes256_bench)
-                ;;
-            *)
-                die "unsupported app: $app"
-                ;;
-        esac
-    done
+validate_accel_mode() {
+    case "$1" in
+        NATIVE|SOFTWARE)
+            ;;
+        *)
+            die "unsupported CRYPTO_ACCEL_MODE=$1; supported: NATIVE SOFTWARE"
+            ;;
+    esac
 }
 
 build_driver_runtime() {
@@ -132,25 +110,54 @@ build_driver_runtime() {
     esac
 }
 
+extract_field() {
+    local pattern="$1"
+    local file="$2"
+    grep "^AES256_BENCH: .*${pattern}=" "$file" | tail -n 1 | sed -nE "s/.*${pattern}=([0-9]+).*/\\1/p" || true
+}
+
+extract_perf() {
+    local file="$1"
+    local line
+    line=$(grep 'PERF: instrs=' "$file" | tail -n 1 || true)
+    if [[ -z "$line" ]]; then
+        printf '\t\t'
+        return
+    fi
+    printf '%s' "$line" | sed -E 's/.*instrs=([0-9]+), cycles=([0-9]+), IPC=([0-9.]+).*/\1\t\2\t\3/'
+}
+
 main() {
     DRIVER="simx"
     STARTUP_ADDR="0x80000000"
     EXT_F_DISABLE=0
     EXT_D_DISABLE=0
     DEBUG_LEVEL=0
-    OPTS_OVERRIDE=""
+    BLOCKS="8192"
+    RESULTS="results.tsv"
+    LOG_DIR="crypto-exp-logs"
+    accel_mode_list="NATIVE"
+    op_type_list="0,1,2,3,4,5,6,7"
 
-    local app_list="all"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --driver=*)
                 DRIVER="${1#*=}"
                 ;;
-            --apps=*)
-                app_list="${1#*=}"
+            --accel-modes=*)
+                accel_mode_list="${1#*=}"
                 ;;
-            --opts=*)
-                OPTS_OVERRIDE="${1#*=}"
+            --op-types=*)
+                op_type_list="${1#*=}"
+                ;;
+            --blocks=*)
+                BLOCKS="${1#*=}"
+                ;;
+            --results=*)
+                RESULTS="${1#*=}"
+                ;;
+            --log-dir=*)
+                LOG_DIR="${1#*=}"
                 ;;
             --startup-addr=*)
                 STARTUP_ADDR="${1#*=}"
@@ -179,12 +186,22 @@ main() {
         shift
     done
 
-    if [[ "$app_list" == "all" ]]; then
-        APPS=(basic demo aes_smoke aes256)
-    else
-        IFS=',' read -r -a APPS <<< "$app_list"
+    if [[ ! "$BLOCKS" =~ ^[0-9]+$ ]] || [[ "$BLOCKS" -eq 0 ]]; then
+        die "--blocks must be a positive integer"
     fi
-    validate_apps
+
+    IFS=',' read -r -a ACCEL_MODES <<< "$accel_mode_list"
+    IFS=',' read -r -a OP_TYPES <<< "$op_type_list"
+
+    local mode
+    for mode in "${ACCEL_MODES[@]}"; do
+        validate_accel_mode "$mode"
+    done
+
+    local op
+    for op in "${OP_TYPES[@]}"; do
+        op_name "$op" > /dev/null
+    done
 
     if [[ ! -f "$ROOT_DIR/config.mk" ]]; then
         die "config.mk not found under $ROOT_DIR"
@@ -200,13 +217,15 @@ main() {
         source "$ROOT_DIR/ci/toolchain_env.sh"
     fi
 
+    mkdir -p "$LOG_DIR"
+
     echo "ROOT_DIR=$ROOT_DIR"
     echo "XLEN=$XLEN"
     echo "DRIVER=$DRIVER"
-    echo "APPS=${APPS[*]}"
-    echo "STARTUP_ADDR=$STARTUP_ADDR"
-    echo "EXT_F_DISABLE=$EXT_F_DISABLE"
-    echo "EXT_D_DISABLE=$EXT_D_DISABLE"
+    echo "ACCEL_MODES=${ACCEL_MODES[*]}"
+    echo "OP_TYPES=${OP_TYPES[*]}"
+    echo "BLOCKS=$BLOCKS"
+    echo "RESULTS=$RESULTS"
 
     run_cmd make -C "$ROOT_DIR/hw" config
 
@@ -218,42 +237,52 @@ main() {
 
     build_driver_runtime
 
+    printf 'algo\top_type\top_name\taccel_mode\tdriver\tblocks_per_task\ttotal_blocks\ttotal_bytes\tinstrs\tcycles\tIPC\tstatus\tlog\n' > "$RESULTS"
+
+    local app_dir="$ROOT_DIR/tests/regression/aes256_bench"
     local failures=0
-    local app
-    for app in "${APPS[@]}"; do
-        local app_dir="$ROOT_DIR/tests/regression/$app"
-        local build_args=("make" "-C" "$app_dir" "clean" "all" "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR")
+    for mode in "${ACCEL_MODES[@]}"; do
+        local build_args=("make" "-C" "$app_dir" "clean" "all" "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR" "CRYPTO_ACCEL_MODE=$mode")
         while IFS= read -r flag; do
             [[ -n "$flag" ]] && build_args+=("$flag")
         done < <(join_flags)
         run_cmd "${build_args[@]}"
 
-        local app_opts
-        if [[ -n "$OPTS_OVERRIDE" ]]; then
-            app_opts="$OPTS_OVERRIDE"
-        else
-            app_opts=$(default_app_opts "$app")
-        fi
+        for op in "${OP_TYPES[@]}"; do
+            local opname
+            local safe_mode
+            local log_file
+            local status
+            local total_blocks
+            local total_bytes
+            local perf
+            opname=$(op_name "$op")
+            safe_mode=${mode//,/+}
+            log_file="$LOG_DIR/aes256-${safe_mode}-op${op}.log"
 
-        local run_args=("make" "-C" "$app_dir" "run-$DRIVER")
-        if [[ -n "$app_opts" ]]; then
-            run_args+=("OPTS=$app_opts")
-        fi
+            echo
+            echo "== Running aes256_bench op=$opname mode=$mode on $DRIVER =="
+            if make -C "$app_dir" "run-$DRIVER" "OPTS=-n $BLOCKS -t $op" 2>&1 | tee "$log_file"; then
+                status="ok"
+            else
+                status="fail"
+                failures=$((failures + 1))
+            fi
 
-        echo
-        echo "== Running $app on $DRIVER =="
-        if ! "${run_args[@]}"; then
-            failures=$((failures + 1))
-            echo "FAILED: $app on $DRIVER" >&2
-        fi
-        echo
+            total_blocks=$(extract_field "total_blocks" "$log_file")
+            total_bytes=$(extract_field "total_bytes" "$log_file")
+            perf=$(extract_perf "$log_file")
+            printf 'aes256\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$op" "$opname" "$mode" "$DRIVER" "$BLOCKS" \
+                "${total_blocks:-}" "${total_bytes:-}" "$perf" "$status" "$log_file" >> "$RESULTS"
+        done
     done
 
     if [[ $failures -ne 0 ]]; then
-        die "$failures app(s) failed"
+        die "$failures AES benchmark run(s) failed; partial results are in $RESULTS"
     fi
 
-    echo "All requested apps passed on $DRIVER"
+    echo "AES crypto experiment results written to $RESULTS"
 }
 
 main "$@"
