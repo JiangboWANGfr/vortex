@@ -16,18 +16,22 @@ CRYPTO_OP_TYPE ?= 4
 AES_BENCH_BLOCKS ?= 8192
 OPTS ?= -n $(AES_BENCH_BLOCKS) -t $(CRYPTO_OP_TYPE)
 
-# AES-only restored modes. HYBRID/TABLE still need the old rotate/table pieces.
+# AES-only restored modes. HYBRID still needs the old rotate intrinsic pieces.
 CRYPTO_ACCEL_MODE ?= NATIVE
 
 SRCS := $(SRC_DIR)/main.cpp
-VX_SRCS := $(SRC_DIR)/kernel.cpp $(VORTEX_HOME)/tests/kernel/aes256/aes256-impl.c
+VX_SRCS := $(SRC_DIR)/kernel.cpp $(VORTEX_HOME)/tests/kernel/aes256/aes256-impl.c $(VORTEX_HOME)/tests/kernel/aes256/tables.c
 
 ifeq ($(CRYPTO_ACCEL_MODE),NATIVE)
   CONFIGS += -DAES_NATIVE
 else ifeq ($(CRYPTO_ACCEL_MODE),SOFTWARE)
   CONFIGS += -DAES_SOFTWARE
+else ifeq ($(CRYPTO_ACCEL_MODE),TABLE)
+  CONFIGS += -DAES_TABLE
+else ifeq ($(CRYPTO_ACCEL_MODE),TABLE_MONOTABLE)
+  CONFIGS += -DAES_TABLE -DAES_MONOTABLE
 else
-  $(error unsupported CRYPTO_ACCEL_MODE=$(CRYPTO_ACCEL_MODE); supported: NATIVE SOFTWARE)
+  $(error unsupported CRYPTO_ACCEL_MODE=$(CRYPTO_ACCEL_MODE); supported: NATIVE SOFTWARE TABLE TABLE_MONOTABLE)
 endif
 
 VX_USE_GCC := 1
