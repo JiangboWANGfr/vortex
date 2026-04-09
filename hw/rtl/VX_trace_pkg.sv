@@ -35,6 +35,7 @@ package VX_trace_pkg;
             EX_ALU: `TRACE(level, ("ALU"))
             EX_LSU: `TRACE(level, ("LSU"))
             EX_SFU: `TRACE(level, ("SFU"))
+            EX_CRYPTO: `TRACE(level, ("CRYPTO"))
         `ifdef EXT_F_ENABLE
             EX_FPU: `TRACE(level, ("FPU"))
         `endif
@@ -109,15 +110,7 @@ package VX_trace_pkg;
                     end
                 end
                 ALU_TYPE_OTHER: begin
-                    if (op_type[3]) begin
-                        case (INST_ALU_BITS'(op_type))
-                            INST_CRYPTO_AES32ESI:  `TRACE(level, ("AES32ESI"))
-                            INST_CRYPTO_AES32ESMI: `TRACE(level, ("AES32ESMI"))
-                            INST_CRYPTO_AES32DSI:  `TRACE(level, ("AES32DSI"))
-                            INST_CRYPTO_AES32DSMI: `TRACE(level, ("AES32DSMI"))
-                            default:               `TRACE(level, ("?"))
-                        endcase
-                    end else if (op_type[2]) begin
+                    if (op_type[2]) begin
                         case (INST_SHFL_BITS'(op_type))
                             INST_SHFL_UP:  `TRACE(level, ("SHFL.UP"))
                             INST_SHFL_DOWN:`TRACE(level, ("SHFL.DOWN"))
@@ -178,6 +171,15 @@ package VX_trace_pkg;
                     end
                 end
                 default: `TRACE(level, ("?"))
+            endcase
+        end
+        EX_CRYPTO: begin
+            case (INST_ALU_BITS'(op_type))
+                INST_CRYPTO_AES32ESI:  `TRACE(level, ("AES32ESI"))
+                INST_CRYPTO_AES32ESMI: `TRACE(level, ("AES32ESMI"))
+                INST_CRYPTO_AES32DSI:  `TRACE(level, ("AES32DSI"))
+                INST_CRYPTO_AES32DSMI: `TRACE(level, ("AES32DSMI"))
+                default:               `TRACE(level, ("?"))
             endcase
         end
         EX_LSU: begin
@@ -430,6 +432,9 @@ package VX_trace_pkg;
             if (inst_sfu_is_csr(op_type)) begin
                 `TRACE(level, ("addr=0x%0h, use_imm=%b, imm=0x%0h", op_args.csr.addr, op_args.csr.use_imm, op_args.csr.imm))
             end
+        end
+        EX_CRYPTO: begin
+            `TRACE(level, ("byte_sel=0x%0h", op_args.alu.imm[1:0]))
         end
     `ifdef EXT_F_ENABLE
         EX_FPU: begin

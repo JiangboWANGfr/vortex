@@ -74,6 +74,15 @@ module VX_execute import VX_gpu_pkg::*; #(
         .lsu_mem_if     (lsu_mem_if)
     );
 
+    VX_crypto_unit #(
+        .INSTANCE_ID (`SFORMATF(("%s-crypto", INSTANCE_ID)))
+    ) crypto_unit (
+        .clk            (clk),
+        .reset          (reset),
+        .dispatch_if    (dispatch_if[EX_CRYPTO * `ISSUE_WIDTH +: `ISSUE_WIDTH]),
+        .commit_if      (commit_if[EX_CRYPTO * `ISSUE_WIDTH +: `ISSUE_WIDTH])
+    );
+
 `ifdef EXT_F_ENABLE
     VX_fpu_unit #(
         .INSTANCE_ID (`SFORMATF(("%s-fpu", INSTANCE_ID)))

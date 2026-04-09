@@ -110,13 +110,14 @@ package VX_gpu_pkg;
 
     ///////////////////////////////////////////////////////////////////////////
 
-	localparam EX_ALU = 0;
-	localparam EX_LSU = 1;
-	localparam EX_SFU = 2;
-	localparam EX_FPU = (EX_SFU + `EXT_F_ENABLED);
-    localparam EX_TCU = (EX_FPU + `EXT_TCU_ENABLED);
+	localparam EX_ALU    = 0;
+	localparam EX_LSU    = 1;
+	localparam EX_SFU    = 2;
+	localparam EX_CRYPTO = 3;
+	localparam EX_FPU    = (EX_CRYPTO + 1);
+    localparam EX_TCU    = (EX_FPU + `EXT_F_ENABLED);
 
-	localparam NUM_EX_UNITS = EX_TCU + 1;
+	localparam NUM_EX_UNITS = EX_CRYPTO + 1 + `EXT_F_ENABLED + `EXT_TCU_ENABLED;
 	localparam EX_BITS = `CLOG2(NUM_EX_UNITS);
 	localparam EX_WIDTH = `UP(EX_BITS);
 
