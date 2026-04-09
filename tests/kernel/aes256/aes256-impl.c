@@ -12,6 +12,9 @@ static void increment_128bit(uint32_t *, uint32_t);
 static void add_round_key(uint8_t *, const uint32_t *);
 static inline uint32_t sub_word(uint32_t);
 static inline uint32_t rot_word(uint32_t);
+#ifdef AES_TABLE
+static inline uint32_t rotl_bytes(uint32_t, int);
+#endif
 //static inline void copy_state(uint8_t *, const uint8_t *);
 #ifndef AES_NATIVE
 #ifndef AES_TABLE
@@ -173,30 +176,24 @@ static void aes256_cipher(const uint8_t *xor_before, const uint8_t *xor_after,
 
 #ifdef AES_TABLE
     for (int round = 1; round < Nr; round++) {
-        uint8_t new_state[4 * Nb];
+        uint32_t new_state[Nb];
         for (int j = 0; j < Nb; j++) {
-            const uint8_t *t0, *t1, *t2, *t3;
+            uint32_t t0, t1, t2, t3;
             t0 = T0_fwd[state[4*j]];
 # ifdef AES_MONOTABLE
             t1 = T0_fwd[state[4*((j + 1) % Nb) + 1]];
             t2 = T0_fwd[state[4*((j + 2) % Nb) + 2]];
             t3 = T0_fwd[state[4*((j + 3) % Nb) + 3]];
+            new_state[j] = t0 ^ rotl_bytes(t1, 1) ^ rotl_bytes(t2, 2) ^ rotl_bytes(t3, 3);
 # else
             t1 = T1_fwd[state[4*((j + 1) % Nb) + 1]];
             t2 = T2_fwd[state[4*((j + 2) % Nb) + 2]];
             t3 = T3_fwd[state[4*((j + 3) % Nb) + 3]];
+            new_state[j] = t0 ^ t1 ^ t2 ^ t3;
 # endif
-
-            for (int k = 0; k < 4; k++) {
-# ifdef AES_MONOTABLE
-                new_state[4*j + k] = t0[k] ^ t1[(k + 3) % 4] ^ t2[(k + 2) % 4] ^ t3[(k + 1) % 4];
-# else
-                new_state[4*j + k] = t0[k] ^ t1[k] ^ t2[k] ^ t3[k];
-# endif
-            }
         }
 
-        add_round_key(new_state, round_keys + (Nb * round));
+        add_round_key((uint8_t *)new_state, round_keys + (Nb * round));
         memcpy(state, new_state, 4 * Nb);
         //copy_state(state, new_state);
     }
@@ -245,30 +242,24 @@ static void aes256_inv_cipher(const uint8_t *xor_after, const uint8_t *in,
 
 #ifdef AES_TABLE
     for (int round = Nr - 1; round > 0; round--) {
-        uint8_t new_state[4 * Nb];
+        uint32_t new_state[Nb];
         for (int j = 0; j < Nb; j++) {
-            const uint8_t *t0, *t1, *t2, *t3;
+            uint32_t t0, t1, t2, t3;
             t0 = T0_inv[state[4*j]];
 # ifdef AES_MONOTABLE
             t1 = T0_inv[state[4*((j + 3) % Nb) + 1]];
             t2 = T0_inv[state[4*((j + 2) % Nb) + 2]];
             t3 = T0_inv[state[4*((j + 1) % Nb) + 3]];
+            new_state[j] = t0 ^ rotl_bytes(t1, 1) ^ rotl_bytes(t2, 2) ^ rotl_bytes(t3, 3);
 # else
             t1 = T1_inv[state[4*((j + 3) % Nb) + 1]];
             t2 = T2_inv[state[4*((j + 2) % Nb) + 2]];
             t3 = T3_inv[state[4*((j + 1) % Nb) + 3]];
+            new_state[j] = t0 ^ t1 ^ t2 ^ t3;
 # endif
-
-            for (int k = 0; k < 4; k++) {
-# ifdef AES_MONOTABLE
-                new_state[4*j + k] = t0[k] ^ t1[(k + 3) % 4] ^ t2[(k + 2) % 4] ^ t3[(k + 1) % 4];
-# else
-                new_state[4*j + k] = t0[k] ^ t1[k] ^ t2[k] ^ t3[k];
-# endif
-            }
         }
 
-        add_round_key(new_state, round_keys + (Nb * round));
+        add_round_key((uint8_t *)new_state, round_keys + (Nb * round));
         memcpy(state, new_state, 4 * Nb);
         //copy_state(state, new_state);
     }
@@ -339,6 +330,13 @@ static inline uint32_t rot_word(uint32_t word) {
     return rotated_word;
 #endif
 }
+
+#ifdef AES_TABLE
+static inline uint32_t rotl_bytes(uint32_t word, int nbytes) {
+    int nbits = nbytes * 8;
+    return (word << nbits) | (word >> (32 - nbits));
+}
+#endif
 
 static void add_round_key(uint8_t *state, const uint32_t *round_keys) {
     for (int i = 0; i < Nb; i++) {
