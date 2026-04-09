@@ -50,6 +50,20 @@ run_cmd() {
     "$@"
 }
 
+format_number() {
+    local value="$1"
+    if [[ -z "$value" ]]; then
+        printf ''
+        return
+    fi
+    printf '%s' "$value" | perl -pe 's/(?<=\d)(?=(?:\d{3})+(?!\d))/,/g'
+}
+
+normalize_number() {
+    local value="$1"
+    printf '%s' "$value" | tr -d ','
+}
+
 join_flags() {
     local result=()
     if [[ "$EXT_F_DISABLE" -eq 1 ]]; then
@@ -115,7 +129,7 @@ build_driver_runtime() {
 extract_field() {
     local pattern="$1"
     local file="$2"
-    grep "^AES256_BENCH: .*${pattern}=" "$file" | tail -n 1 | sed -nE "s/.*${pattern}=([0-9]+).*/\\1/p" || true
+    grep "^AES256_BENCH: .*${pattern}=" "$file" | tail -n 1 | sed -nE "s/.*${pattern}=([0-9,]+).*/\\1/p" | tr -d ',' || true
 }
 
 extract_perf() {
@@ -126,7 +140,7 @@ extract_perf() {
         printf '\t\t'
         return
     fi
-    printf '%s' "$line" | sed -E 's/.*instrs=([0-9]+), cycles=([0-9]+), IPC=([0-9.]+).*/\1\t\2\t\3/'
+    printf '%s' "$line" | sed -E 's/.*instrs=([0-9,]+), cycles=([0-9,]+), IPC=([0-9.]+).*/\1\t\2\t\3/' | tr -d ','
 }
 
 main() {
@@ -265,6 +279,9 @@ main() {
             local total_blocks
             local total_bytes
             local perf
+            local perf_instrs
+            local perf_cycles
+            local perf_ipc
             opname=$(op_name "$op")
             safe_mode=${mode//,/+}
             log_file="$LOG_DIR/aes256-${safe_mode}-op${op}.log"
@@ -281,9 +298,12 @@ main() {
             total_blocks=$(extract_field "total_blocks" "$log_file")
             total_bytes=$(extract_field "total_bytes" "$log_file")
             perf=$(extract_perf "$log_file")
-            printf 'aes256\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-                "$op" "$opname" "$mode" "$DRIVER" "$BLOCKS" \
-                "${total_blocks:-}" "${total_bytes:-}" "$perf" "$status" "$log_file" >> "$RESULTS"
+            IFS=$'\t' read -r perf_instrs perf_cycles perf_ipc <<< "$perf"
+            printf 'aes256\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$op" "$opname" "$mode" "$DRIVER" "$(format_number "$(normalize_number "$BLOCKS")")" \
+                "$(format_number "$total_blocks")" "$(format_number "$total_bytes")" \
+                "$(format_number "$perf_instrs")" "$(format_number "$perf_cycles")" "${perf_ipc:-}" \
+                "$status" "$log_file" >> "$RESULTS"
         done
     done
 
