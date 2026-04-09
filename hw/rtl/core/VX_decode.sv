@@ -177,8 +177,8 @@ module VX_decode import VX_gpu_pkg::*; #(
                 `USED_IREG (rs2);
                 if (funct3 == 3'h0 && ((funct7 & 7'h19) == 7'h19)) begin
                     ex_type = EX_CRYPTO;
-                    op_args.alu.xtype = ALU_TYPE_OTHER;
-                    op_args.alu.imm = `XLEN'(funct7[6:5]);
+                    op_args.crypto.unit = CRYPTO_CLASS_AES;
+                    op_args.crypto.byte_select = funct7[6:5];
                     case (funct7[2:1])
                         2'b00: op_type = INST_OP_BITS'(INST_CRYPTO_AES32ESI);
                         2'b01: op_type = INST_OP_BITS'(INST_CRYPTO_AES32ESMI);

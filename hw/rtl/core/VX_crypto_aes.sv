@@ -13,7 +13,7 @@
 
 `include "VX_define.vh"
 
-module VX_alu_crypto import VX_gpu_pkg::*; #(
+module VX_crypto_aes import VX_gpu_pkg::*; #(
     parameter `STRING INSTANCE_ID = "",
     parameter NUM_LANES = 1
 ) (
@@ -33,7 +33,7 @@ module VX_alu_crypto import VX_gpu_pkg::*; #(
     wire do_dsi  = (execute_if.data.op_type == INST_CRYPTO_AES32DSI);
     wire do_dsmi = (execute_if.data.op_type == INST_CRYPTO_AES32DSMI);
 
-    wire [1:0] byte_select = execute_if.data.op_args.alu.imm[1:0];
+    wire [1:0] byte_select = execute_if.data.op_args.crypto.byte_select;
 
     wire [NUM_LANES-1:0][31:0] rs1_data;
     wire [NUM_LANES-1:0][31:0] rs2_data;

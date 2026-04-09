@@ -434,7 +434,7 @@ package VX_trace_pkg;
             end
         end
         EX_CRYPTO: begin
-            `TRACE(level, ("byte_sel=0x%0h", op_args.alu.imm[1:0]))
+            `TRACE(level, ("unit=0x%0h, byte_sel=0x%0h", op_args.crypto.unit, op_args.crypto.byte_select))
         end
     `ifdef EXT_F_ENABLE
         EX_FPU: begin

@@ -278,6 +278,12 @@ package VX_gpu_pkg;
     localparam INST_CRYPTO_AES32DSI  = 4'b1010;
     localparam INST_CRYPTO_AES32DSMI = 4'b1011;
 
+    localparam CRYPTO_CLASS_BITS = 2;
+    localparam CRYPTO_CLASS_AES  = 2'd0;
+    localparam CRYPTO_CLASS_SHA  = 2'd1;
+    localparam CRYPTO_CLASS_SM4  = 2'd2;
+    localparam CRYPTO_CLASS_MISC = 2'd3;
+
     ///////////////////////////////////////////////////////////////////////////
 
     localparam INST_M_MUL =      3'b000;
@@ -536,6 +542,13 @@ package VX_gpu_pkg;
     } wctl_args_t;
     `PACKAGE_ASSERT($bits(wctl_args_t) == INST_ARGS_BITS)
 
+    typedef struct packed {
+        logic [(INST_ARGS_BITS-CRYPTO_CLASS_BITS-2)-1:0] __padding;
+        logic [CRYPTO_CLASS_BITS-1:0] unit;
+        logic [1:0] byte_select;
+    } crypto_args_t;
+    `PACKAGE_ASSERT($bits(crypto_args_t) == INST_ARGS_BITS)
+
 `ifdef EXT_TCU_ENABLE
     typedef struct packed {
         logic [(INST_ARGS_BITS-16)-1:0] __padding;
@@ -553,6 +566,7 @@ package VX_gpu_pkg;
         lsu_args_t  lsu;
         csr_args_t  csr;
         wctl_args_t wctl;
+        crypto_args_t crypto;
     `ifdef EXT_TCU_ENABLE
         tcu_args_t  tcu;
     `endif

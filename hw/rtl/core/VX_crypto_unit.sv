@@ -30,6 +30,9 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
     localparam BLOCK_SIZE   = `NUM_ALU_BLOCKS;
     localparam NUM_LANES    = `NUM_ALU_LANES;
     localparam PARTIAL_BW   = (BLOCK_SIZE != `ISSUE_WIDTH) || (NUM_LANES != `SIMD_WIDTH);
+    localparam PE_COUNT     = 1;
+    localparam PE_SEL_BITS  = `CLOG2(PE_COUNT);
+    localparam PE_IDX_AES   = 0;
 
     VX_execute_if #(
         .data_t (alu_exe_t)
@@ -51,14 +54,47 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
     );
 
     for (genvar block_idx = 0; block_idx < BLOCK_SIZE; ++block_idx) begin : g_blocks
-        VX_alu_crypto #(
+        VX_execute_if #(
+            .data_t (alu_exe_t)
+        ) pe_execute_if[PE_COUNT]();
+
+        VX_result_if #(
+            .data_t (alu_res_t)
+        ) pe_result_if[PE_COUNT]();
+
+        reg [`UP(PE_SEL_BITS)-1:0] pe_select;
+        always @(*) begin
+            pe_select = PE_IDX_AES;
+            case (per_block_execute_if[block_idx].data.op_args.crypto.unit)
+                CRYPTO_CLASS_AES: pe_select = PE_IDX_AES;
+                default:          pe_select = PE_IDX_AES;
+            endcase
+        end
+
+        VX_pe_switch #(
+            .PE_COUNT    (PE_COUNT),
+            .NUM_LANES   (NUM_LANES),
+            .ARBITER     ("R"),
+            .REQ_OUT_BUF (0),
+            .RSP_OUT_BUF (PARTIAL_BW ? 1 : 3)
+        ) pe_switch (
+            .clk            (clk),
+            .reset          (reset),
+            .pe_sel         (pe_select),
+            .execute_in_if  (per_block_execute_if[block_idx]),
+            .result_out_if  (per_block_result_if[block_idx]),
+            .execute_out_if (pe_execute_if),
+            .result_in_if   (pe_result_if)
+        );
+
+        VX_crypto_aes #(
             .INSTANCE_ID (`SFORMATF(("%s-aes%0d", INSTANCE_ID, block_idx))),
-            .NUM_LANES (NUM_LANES)
+            .NUM_LANES   (NUM_LANES)
         ) aes_unit (
             .clk        (clk),
             .reset      (reset),
-            .execute_if (per_block_execute_if[block_idx]),
-            .result_if  (per_block_result_if[block_idx])
+            .execute_if (pe_execute_if[PE_IDX_AES]),
+            .result_if  (pe_result_if[PE_IDX_AES])
         );
     end
 
