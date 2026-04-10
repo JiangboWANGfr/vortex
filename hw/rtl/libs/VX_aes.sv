@@ -10,6 +10,8 @@ module riscv_crypto_sbox_inv_mid(
     input  wire [20:0] x,
     output wire [17:0] y
 );
+    // Shared nonlinear core used by both the forward and inverse AES S-boxes
+    // after their respective basis transforms.
 
     wire t0  = x[ 3] ^ x[12];
     wire t1  = x[ 9] & x[ 5];
@@ -83,6 +85,8 @@ module riscv_crypto_sbox_aes_top(
     input  wire [ 7:0] x,
     output wire [20:0] y
 );
+    // Forward AES S-box input transform into the composite-field basis used by
+    // the shared inversion core.
 
     wire y0  = x[0];
     wire y1  = x[7] ^ x[4];
@@ -140,6 +144,7 @@ module riscv_crypto_sbox_aes_out(
     input  wire [17:0] x,
     output wire [ 7:0] y
 );
+    // Forward AES S-box output transform back from the shared core domain.
 
     wire t0  = x[11] ^ x[12];
     wire t1  = x[0] ^ x[6];
@@ -187,6 +192,7 @@ module riscv_crypto_sbox_aesi_top(
     output wire [20:0] y,
     input  wire [ 7:0] x
 );
+    // Inverse AES S-box input transform into the same shared core domain.
 
     wire y17 = x[7] ^ x[4];
     wire y16 = x[6] ^~ x[4];
@@ -243,6 +249,7 @@ module riscv_crypto_sbox_aesi_out(
     output wire [ 7:0] y,
     input  wire [17:0] x
 );
+    // Inverse AES S-box output transform back from the shared core domain.
 
     wire t0  = x[2] ^ x[11];
     wire t1  = x[8] ^ x[9];
@@ -310,6 +317,7 @@ module VX_aes #(
     reg [LANES-1:0][7:0] sel_byte;
     for (genvar i = 0; i < LANES; ++i) begin : g_sel_byte
         always @(*) begin
+            // AES32 instructions operate on one selected byte from rs2.
             case (bs)
                 2'b00: sel_byte[i] = rs2_data[i][7:0];
                 2'b01: sel_byte[i] = rs2_data[i][15:8];
@@ -326,6 +334,8 @@ module VX_aes #(
     for (genvar i = 0; i < LANES; ++i) begin : g_stage1_in
         wire [20:0] top_fwd;
         wire [20:0] top_inv;
+        // Both S-box directions share the same middle inversion logic. The
+        // dec bit selects which basis transform pair to use around it.
         riscv_crypto_sbox_aes_top top (.y(top_fwd), .x(sel_byte[i]));
         riscv_crypto_sbox_aesi_top inv_top (.y(top_inv), .x(sel_byte[i]));
         riscv_crypto_sbox_inv_mid mid (.y(stage1_in[i]), .x(dec ? top_inv : top_fwd));
@@ -348,6 +358,8 @@ module VX_aes #(
         .clk      (clk),
         .reset    (reset),
         .enable   (ready_in),
+        // Keep the S-box middle stage result together with the operation mode,
+        // byte index, and rs1 so the second stage can finish the AES32 op.
         .data_in  ({valid_in, stage1_in, dec, mix, bs, rs1_data}),
         .data_out ({stage1_valid, stage1_out, stage1_dec, stage1_mix, stage1_bs, stage1_rs1_data})
     );
@@ -362,6 +374,7 @@ module VX_aes #(
     end
 
     function automatic [7:0] xtime2(input [7:0] a);
+        // GF(2^8) multiply by x modulo x^8 + x^4 + x^3 + x + 1 (0x11b).
         xtime2 = {a[6:0], 1'b0} ^ (a[7] ? 8'h1b : 8'b0);
     endfunction
 
@@ -369,6 +382,7 @@ module VX_aes #(
         input [7:0] a,
         input [3:0] b
     );
+        // Multiply by a small AES constant using the xtime decomposition.
         xtimeN =
             (b[0] ? a : 0) ^
             (b[1] ? xtime2(a) : 0) ^
@@ -377,19 +391,25 @@ module VX_aes #(
     endfunction
 
     for (genvar i = 0; i < LANES; ++i) begin : g_result
+        // Coefficients for MixColumns / InvMixColumns contribution of one byte.
         wire [7:0] mix_b3 = xtimeN(sbox_out[i], (stage1_dec ? 4'd11 : 4'd3));
         wire [7:0] mix_b2 = stage1_dec ? xtimeN(sbox_out[i], 4'd13) : sbox_out[i];
         wire [7:0] mix_b1 = stage1_dec ? xtimeN(sbox_out[i], 4'd9)  : sbox_out[i];
         wire [7:0] mix_b0 = xtimeN(sbox_out[i], (stage1_dec ? 4'd14 : 4'd2));
 
         wire [31:0] mixed = {mix_b3, mix_b2, mix_b1, mix_b0};
+        // Non-mix variants contribute only the substituted byte in the low byte.
         wire [31:0] zext  = stage1_mix ? mixed : {24'b0, sbox_out[i]};
+        // Rotate into the byte lane selected by bs, matching AES32 instruction
+        // semantics before XORing with rs1.
         wire [31:0] rotated =
             ({32{stage1_bs == 2'b00}} & {zext}) |
             ({32{stage1_bs == 2'b01}} & {zext[23:0], zext[31:24]}) |
             ({32{stage1_bs == 2'b10}} & {zext[15:0], zext[31:16]}) |
             ({32{stage1_bs == 2'b11}} & {zext[7:0],  zext[31:8]});
 
+        // rs1 carries the running 32-bit word that this byte contribution is
+        // merged into.
         assign result[i] = rotated ^ stage1_rs1_data[i];
     end
 
