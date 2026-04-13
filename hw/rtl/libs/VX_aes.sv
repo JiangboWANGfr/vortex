@@ -291,6 +291,140 @@ module riscv_crypto_sbox_aesi_out(
     assign y[7] = t13 ^ t22;
 
 endmodule
+module GF_2_4_Mul2 (
+    output wire [3:0] q,
+    input  wire [3:0] a,
+    input  wire [3:0] b
+);
+    assign q[0] = (a[3] & b[3]) ^ (a[3] & b[2]) ^ (a[2] & b[3]) ^ (a[0] & b[0]) ^
+                  (a[3] & b[1]) ^ (a[2] & b[2]) ^ (a[1] & b[3]);
+    assign q[1] = (a[3] & b[3]) ^ (a[3] & b[2]) ^ (a[2] & b[3]) ^
+                  (a[1] & b[0]) ^ (a[0] & b[1]);
+    assign q[2] = (a[3] & b[3]) ^ (a[2] & b[0]) ^ (a[1] & b[1]) ^ (a[0] & b[2]);
+    assign q[3] = (a[3] & b[3]) ^ (a[3] & b[2]) ^ (a[2] & b[3]) ^ (a[3] & b[1]) ^
+                  (a[2] & b[2]) ^ (a[1] & b[3]) ^ (a[3] & b[0]) ^ (a[2] & b[1]) ^
+                  (a[1] & b[2]) ^ (a[0] & b[3]);
+endmodule
+
+module GF_2_4_Sqr2 (
+    output wire [3:0] q,
+    input  wire [3:0] a
+);
+    assign q[0] = a[0] ^ a[2] ^ a[3];
+    assign q[1] = a[3];
+    assign q[2] = a[1] ^ a[3];
+    assign q[3] = a[2] ^ a[3];
+endmodule
+
+module GF_2_4_Inv2_LUT (
+    output reg  [3:0] out,
+    input  wire [3:0] in
+);
+    always @(*) begin
+        case (in)
+            4'h0: out = 4'b0000;
+            4'h1: out = 4'b0001;
+            4'h2: out = 4'b1100;
+            4'h3: out = 4'b1000;
+            4'h4: out = 4'b0110;
+            4'h5: out = 4'b1111;
+            4'h6: out = 4'b0100;
+            4'h7: out = 4'b1110;
+            4'h8: out = 4'b0011;
+            4'h9: out = 4'b1101;
+            4'hA: out = 4'b1011;
+            4'hB: out = 4'b1010;
+            4'hC: out = 4'b0010;
+            4'hD: out = 4'b1001;
+            4'hE: out = 4'b0111;
+            4'hF: out = 4'b0101;
+        endcase
+    end
+endmodule
+
+module riscv_crypto_sbox_aes_2_2_8 (
+    input  wire [7:0] in,
+    output wire [7:0] out
+);
+    // Explorer candidate GF((2^4)^2) S-box #2_2_8.
+    // This is used as an experimental forward AES S-box replacement so we can
+    // compare it against the current shared-core implementation in Vortex.
+
+    wire [3:0] inH, inL, inH2, inH2E, inL2_add_inHL, inH_add_inL;
+    wire [3:0] outH, outL, d, d_inv;
+
+    assign inH[3] = in[7] ^ in[6] ^ in[4] ^ in[1];
+    assign inH[2] = in[6] ^ in[5] ^ in[4] ^ in[3] ^ in[2] ^ in[1];
+    assign inH[1] = in[3] ^ in[2];
+    assign inH[0] = in[7] ^ in[6] ^ in[4];
+    assign inL[3] = in[2];
+    assign inL[2] = in[7] ^ in[6] ^ in[5] ^ in[4] ^ in[3];
+    assign inL[1] = in[7] ^ in[6] ^ in[5] ^ in[2];
+    assign inL[0] = in[7] ^ in[5] ^ in[4] ^ in[3] ^ in[0];
+
+    GF_2_4_Sqr2 u_sqr_H (.q(inH2), .a(inH));
+    GF_2_4_Mul2 u_mul_constE (.q(inH2E), .a(inH2), .b(4'h3));
+    assign inH_add_inL = inH ^ inL;
+    GF_2_4_Mul2 u_mul_H_L (.q(inL2_add_inHL), .a(inH_add_inL), .b(inL));
+    assign d = inH2E ^ inL2_add_inHL;
+    GF_2_4_Inv2_LUT u_inv (.out(d_inv), .in(d));
+    GF_2_4_Mul2 u_mul_H_di (.q(outH), .a(inH), .b(d_inv));
+    GF_2_4_Mul2 u_mul_H_L_di (.q(outL), .a(inH_add_inL), .b(d_inv));
+
+    assign out[7] = outL[2];
+    assign out[6] = ~(outH[3] ^ outH[2] ^ outH[0]);
+    assign out[5] = ~(outH[3] ^ outH[1] ^ outL[3] ^ outL[1]);
+    assign out[4] = outH[2] ^ outH[1] ^ outH[0] ^ outL[3] ^ outL[0];
+    assign out[3] = outH[3] ^ outL[1] ^ outL[0];
+    assign out[2] = outH[2] ^ outL[0];
+    assign out[1] = ~(outH[2] ^ outH[1] ^ outH[0] ^ outL[2] ^ outL[0]);
+    assign out[0] = ~(outH[3] ^ outH[2] ^ outL[1] ^ outL[0]);
+endmodule
+
+module riscv_crypto_sbox_aesi_2_2_8 (
+    input  wire [7:0] in,
+    output wire [7:0] out
+);
+    // Direct inverse for explorer candidate GF((2^4)^2) S-box #2_2_8.
+    // This undoes the combined output transform, applies the same composite
+    // field inversion core, then applies the inverse of the input mapping.
+
+    wire [7:0] z;
+    wire [3:0] inH, inL, inH2, inH2E, inL2_add_inHL, inH_add_inL;
+    wire [3:0] outH, outL, d, d_inv;
+    wire [7:0] mapped_in;
+
+    assign z = in ^ 8'h63;
+
+    assign inH[0] = z[0] ^ z[4] ^ z[5];
+    assign inH[1] = z[0] ^ z[1] ^ z[2] ^ z[4] ^ z[5] ^ z[7];
+    assign inH[2] = z[0] ^ z[3];
+    assign inH[3] = z[3] ^ z[4] ^ z[5] ^ z[6];
+    assign inL[0] = z[0] ^ z[2] ^ z[3];
+    assign inL[1] = z[0] ^ z[2] ^ z[3] ^ z[4] ^ z[5] ^ z[6];
+    assign inL[2] = z[7];
+    assign inL[3] = z[1] ^ z[4] ^ z[7];
+
+    GF_2_4_Sqr2 u_sqr_H (.q(inH2), .a(inH));
+    GF_2_4_Mul2 u_mul_constE (.q(inH2E), .a(inH2), .b(4'h3));
+    assign inH_add_inL = inH ^ inL;
+    GF_2_4_Mul2 u_mul_H_L (.q(inL2_add_inHL), .a(inH_add_inL), .b(inL));
+    assign d = inH2E ^ inL2_add_inHL;
+    GF_2_4_Inv2_LUT u_inv (.out(d_inv), .in(d));
+    GF_2_4_Mul2 u_mul_H_di (.q(outH), .a(inH), .b(d_inv));
+    GF_2_4_Mul2 u_mul_H_L_di (.q(outL), .a(inH_add_inL), .b(d_inv));
+
+    assign mapped_in[0] = outH[1] ^ outH[2] ^ outH[3] ^ outL[0] ^ outL[1] ^ outL[2] ^ outL[3];
+    assign mapped_in[1] = outH[0] ^ outH[3];
+    assign mapped_in[2] = outL[3];
+    assign mapped_in[3] = outH[1] ^ outL[3];
+    assign mapped_in[4] = outH[1] ^ outL[1] ^ outL[2];
+    assign mapped_in[5] = outH[0] ^ outH[1] ^ outL[2] ^ outL[3];
+    assign mapped_in[6] = outH[1] ^ outH[2] ^ outH[3] ^ outL[1] ^ outL[3];
+    assign mapped_in[7] = outH[0] ^ outH[2] ^ outH[3] ^ outL[2] ^ outL[3];
+
+    assign out = mapped_in;
+endmodule
 
 module VX_aes #(
     parameter LANES = 1
@@ -330,8 +464,17 @@ module VX_aes #(
     wire dec = op_saes32_decs || op_saes32_decsm;
     wire mix = op_saes32_encsm || op_saes32_decsm;
 
+`ifdef VX_AES_USE_EXPLORER_SBOX_228
+    wire [LANES-1:0][7:0] stage1_fwd_alt_in;
+    wire [LANES-1:0][7:0] stage1_inv_alt_in;
+`else
     wire [LANES-1:0][17:0] stage1_in;
+`endif
     for (genvar i = 0; i < LANES; ++i) begin : g_stage1_in
+`ifdef VX_AES_USE_EXPLORER_SBOX_228
+        riscv_crypto_sbox_aes_2_2_8 alt_fwd (.out(stage1_fwd_alt_in[i]), .in(sel_byte[i]));
+        riscv_crypto_sbox_aesi_2_2_8 alt_inv (.out(stage1_inv_alt_in[i]), .in(sel_byte[i]));
+`else
         wire [20:0] top_fwd;
         wire [20:0] top_inv;
         // Both S-box directions share the same middle inversion logic. The
@@ -339,20 +482,30 @@ module VX_aes #(
         riscv_crypto_sbox_aes_top top (.y(top_fwd), .x(sel_byte[i]));
         riscv_crypto_sbox_aesi_top inv_top (.y(top_inv), .x(sel_byte[i]));
         riscv_crypto_sbox_inv_mid mid (.y(stage1_in[i]), .x(dec ? top_inv : top_fwd));
+`endif
     end
 
-    wire [LANES-1:0][17:0] stage1_out;
     wire                   stage1_valid;
     wire                   stage1_dec;
     wire                   stage1_mix;
     wire [1:0]             stage1_bs;
     wire [LANES-1:0][31:0] stage1_rs1_data;
+`ifdef VX_AES_USE_EXPLORER_SBOX_228
+    wire [LANES-1:0][7:0]  stage1_fwd_alt_out;
+    wire [LANES-1:0][7:0]  stage1_inv_alt_out;
+`else
+    wire [LANES-1:0][17:0] stage1_out;
+`endif
 
     assign ready_in = ~stall_out || ~stage1_valid;
     assign valid_out = stage1_valid;
 
     VX_pipe_register #(
+`ifdef VX_AES_USE_EXPLORER_SBOX_228
+        .DATAW  (1 + (LANES * 8) + (LANES * 8) + 1 + 1 + 2 + (LANES * 32)),
+`else
         .DATAW  (1 + (LANES * 18) + 1 + 1 + 2 + (LANES * 32)),
+`endif
         .RESETW (1)
     ) stage1_reg (
         .clk      (clk),
@@ -360,17 +513,26 @@ module VX_aes #(
         .enable   (ready_in),
         // Keep the S-box middle stage result together with the operation mode,
         // byte index, and rs1 so the second stage can finish the AES32 op.
+`ifdef VX_AES_USE_EXPLORER_SBOX_228
+        .data_in  ({valid_in, stage1_fwd_alt_in, stage1_inv_alt_in, dec, mix, bs, rs1_data}),
+        .data_out ({stage1_valid, stage1_fwd_alt_out, stage1_inv_alt_out, stage1_dec, stage1_mix, stage1_bs, stage1_rs1_data})
+`else
         .data_in  ({valid_in, stage1_in, dec, mix, bs, rs1_data}),
         .data_out ({stage1_valid, stage1_out, stage1_dec, stage1_mix, stage1_bs, stage1_rs1_data})
+`endif
     );
 
     wire [LANES-1:0][7:0] sbox_out;
     for (genvar i = 0; i < LANES; ++i) begin : g_sbox_out
-        wire [7:0] outer_fwd;
+`ifdef VX_AES_USE_EXPLORER_SBOX_228
+        assign sbox_out[i] = stage1_dec ? stage1_inv_alt_out[i] : stage1_fwd_alt_out[i];
+`else
         wire [7:0] outer_inv;
-        riscv_crypto_sbox_aes_out out (.y(outer_fwd), .x(stage1_out[i]));
+        wire [7:0] outer_fwd;
         riscv_crypto_sbox_aesi_out inv_out (.y(outer_inv), .x(stage1_out[i]));
+        riscv_crypto_sbox_aes_out out (.y(outer_fwd), .x(stage1_out[i]));
         assign sbox_out[i] = stage1_dec ? outer_inv : outer_fwd;
+`endif
     end
 
     function automatic [7:0] xtime2(input [7:0] a);
