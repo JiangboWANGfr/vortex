@@ -306,11 +306,18 @@ enum class AesType {
   ESI,
   ESMI,
   DSI,
-  DSMI
+  DSMI,
+  ES64,
+  ESM64,
+  DS64,
+  DSM64,
+  IM64,
+  KS1I64,
+  KS2_64
 };
 
 struct IntrAesArgs {
-  uint32_t byte_select : 2;
+  uint32_t imm;
 };
 
 inline std::ostream &operator<<(std::ostream &os, const AesType& type) {
@@ -319,6 +326,13 @@ inline std::ostream &operator<<(std::ostream &os, const AesType& type) {
   case AesType::ESMI: os << "AES32ESMI"; break;
   case AesType::DSI:  os << "AES32DSI"; break;
   case AesType::DSMI: os << "AES32DSMI"; break;
+  case AesType::ES64:   os << "AES64ES"; break;
+  case AesType::ESM64:  os << "AES64ESM"; break;
+  case AesType::DS64:   os << "AES64DS"; break;
+  case AesType::DSM64:  os << "AES64DSM"; break;
+  case AesType::IM64:   os << "AES64IM"; break;
+  case AesType::KS1I64: os << "AES64KS1I"; break;
+  case AesType::KS2_64: os << "AES64KS2"; break;
   default:
     assert(false);
   }

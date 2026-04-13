@@ -185,10 +185,17 @@ static op_string_t op_string(const Instr &instr) {
     [&](AesType aes_type)-> op_string_t {
       auto aesArgs = std::get<IntrAesArgs>(instrArgs);
       switch (aes_type) {
-      case AesType::ESI:  return {"AES32ESI",  std::to_string(aesArgs.byte_select)};
-      case AesType::ESMI: return {"AES32ESMI", std::to_string(aesArgs.byte_select)};
-      case AesType::DSI:  return {"AES32DSI",  std::to_string(aesArgs.byte_select)};
-      case AesType::DSMI: return {"AES32DSMI", std::to_string(aesArgs.byte_select)};
+      case AesType::ESI:  return {"AES32ESI",  std::to_string(aesArgs.imm)};
+      case AesType::ESMI: return {"AES32ESMI", std::to_string(aesArgs.imm)};
+      case AesType::DSI:  return {"AES32DSI",  std::to_string(aesArgs.imm)};
+      case AesType::DSMI: return {"AES32DSMI", std::to_string(aesArgs.imm)};
+      case AesType::ES64:   return {"AES64ES", ""};
+      case AesType::ESM64:  return {"AES64ESM", ""};
+      case AesType::DS64:   return {"AES64DS", ""};
+      case AesType::DSM64:  return {"AES64DSM", ""};
+      case AesType::IM64:   return {"AES64IM", ""};
+      case AesType::KS1I64: return {"AES64KS1I", std::to_string(aesArgs.imm)};
+      case AesType::KS2_64: return {"AES64KS2", ""};
       default:
         std::abort();
       }
@@ -563,7 +570,13 @@ void Emulator::decode(uint32_t code, uint32_t wid, uint64_t uuid) {
       instr->setOpType(AluType::CZERO);
       instr->setArgs(IntrAluArgs{0, 0, imm});
     } else
-    if (op == Opcode::R && funct3 == 0x0 && (funct7 & 0x19) == 0x19) {
+    if (
+#ifndef XLEN_64
+        op == Opcode::R && funct3 == 0x0 && (funct7 & 0x19) == 0x19
+#else
+        false
+#endif
+    ) {
       switch ((funct7 >> 1) & 0x3) {
       case 0:
         instr->setOpType(AesType::ESI);
@@ -582,6 +595,44 @@ void Emulator::decode(uint32_t code, uint32_t wid, uint64_t uuid) {
       }
       instr->setArgs(IntrAesArgs{funct7 >> 5});
     } else
+#ifdef XLEN_64
+    if (op == Opcode::R && funct3 == 0x0
+     && (funct7 == 0x19 || funct7 == 0x1b || funct7 == 0x1d || funct7 == 0x1f || funct7 == 0x3f)) {
+      switch (funct7) {
+      case 0x19:
+        instr->setOpType(AesType::ES64);
+        break;
+      case 0x1b:
+        instr->setOpType(AesType::ESM64);
+        break;
+      case 0x1d:
+        instr->setOpType(AesType::DS64);
+        break;
+      case 0x1f:
+        instr->setOpType(AesType::DSM64);
+        break;
+      case 0x3f:
+        instr->setOpType(AesType::KS2_64);
+        break;
+      default:
+        std::abort();
+      }
+      instr->setArgs(IntrAesArgs{0});
+    } else
+    if (op == Opcode::I && funct3 == 0x1) {
+      auto imm12 = (code >> shift_rs2) & mask_i_imm;
+      if ((imm12 & 0xfff) == 0x300) {
+        instr->setOpType(AesType::IM64);
+        instr->setArgs(IntrAesArgs{0});
+      } else
+      if ((imm12 & 0xff0) == 0x310) {
+        instr->setOpType(AesType::KS1I64);
+        instr->setArgs(IntrAesArgs{imm12 & 0x00f});
+      } else {
+        goto decode_integer_alu;
+      }
+    } else
+#endif
     if ((op == Opcode::R || op == Opcode::R_W) && (funct7 & 0x1)) {
       switch (funct3) {
       case 0: { // RV32M: MUL
@@ -621,6 +672,7 @@ void Emulator::decode(uint32_t code, uint32_t wid, uint64_t uuid) {
       }
       instr->setArgs(IntrMdvArgs{is_w});
     } else {
+decode_integer_alu:
       uint32_t imm = 0;
       if (funct3 == 0x1 || funct3 == 0x5) {
         // Shift instructions

@@ -75,7 +75,8 @@ private:
   std::vector<Socket::Ptr>    sockets_;
   std::vector<CoreMask>       barriers_;
   CacheSim::Ptr               l2cache_;
-  uint32_t                    cores_per_socket_;
+  uint32_t                    first_core_id_;
+  uint32_t                    num_cores_;
 };
 
 } // namespace vortex

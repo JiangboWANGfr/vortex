@@ -25,18 +25,29 @@ Cluster::Cluster(const SimContext& ctx,
   , mem_rsp_ports(L2_MEM_PORTS, this)
   , cluster_id_(cluster_id)
   , processor_(processor)
-  , sockets_(NUM_SOCKETS)
+  , sockets_()
   , barriers_(arch.num_barriers(), 0)
-  , cores_per_socket_(arch.socket_size())
+  , first_core_id_(0)
+  , num_cores_(0)
 {
   char sname[100];
 
-  uint32_t sockets_per_cluster = sockets_.size();
+  uint32_t total_sockets = (arch.num_cores() + arch.socket_size() - 1) / arch.socket_size();
+  uint32_t sockets_per_cluster = total_sockets / arch.num_clusters();
+  uint32_t sockets_remainder = total_sockets % arch.num_clusters();
+  if (cluster_id < sockets_remainder) {
+    ++sockets_per_cluster;
+  }
+
+  uint32_t first_socket_id = cluster_id * (total_sockets / arch.num_clusters()) + std::min(cluster_id, sockets_remainder);
+  sockets_.resize(sockets_per_cluster);
+  first_core_id_ = first_socket_id * arch.socket_size();
+  num_cores_ = std::min<uint32_t>(arch.num_cores() - first_core_id_, sockets_per_cluster * arch.socket_size());
 
   // create sockets
 
   for (uint32_t i = 0; i < sockets_per_cluster; ++i) {
-    uint32_t socket_id = cluster_id * sockets_per_cluster + i;
+    uint32_t socket_id = first_socket_id + i;
     sockets_.at(i) = Socket::Create(socket_id, this, arch, dcrs);
   }
 
@@ -121,25 +132,23 @@ int Cluster::get_exitcode() const {
 void Cluster::barrier(uint32_t bar_id, uint32_t count, uint32_t core_id) {
   auto& barrier = barriers_.at(bar_id);
 
-  auto sockets_per_cluster = sockets_.size();
-  auto cores_per_socket = cores_per_socket_;
-
-  uint32_t cores_per_cluster = sockets_per_cluster * cores_per_socket;
-  uint32_t local_core_id = core_id % cores_per_cluster;
+  uint32_t local_core_id = core_id - first_core_id_;
   barrier.set(local_core_id);
 
   DP(3, "*** Suspend core #" << core_id << " at barrier #" << bar_id);
 
   if (barrier.count() == (size_t)count) {
       // resume all suspended cores
-      for (uint32_t s = 0; s < sockets_per_cluster; ++s) {
-        for (uint32_t c = 0; c < cores_per_socket; ++c) {
-          uint32_t i = s * cores_per_socket + c;
+      uint32_t local_core_base = 0;
+      for (uint32_t s = 0; s < sockets_.size(); ++s) {
+        for (uint32_t c = 0; c < sockets_.at(s)->num_cores(); ++c) {
+          uint32_t i = local_core_base + c;
           if (barrier.test(i)) {
             DP(3, "*** Resume core #" << i << " at barrier #" << bar_id);
             sockets_.at(s)->resume(c);
           }
         }
+        local_core_base += sockets_.at(s)->num_cores();
       }
       barrier.reset();
     }

@@ -293,16 +293,93 @@ static inline uint32_t __intrin_aes32dsmi(uint32_t acc, uint32_t word, uint32_t 
     return acc;
 }
 
+#ifdef XLEN_64
+static inline uint64_t __intrin_aes64es(uint64_t rs1, uint64_t rs2) {
+    uint64_t rd;
+    __asm__ volatile (".insn r 0x33, 0, 0x19, %0, %1, %2" : "=r"(rd) : "r"(rs1), "r"(rs2));
+    return rd;
+}
+
+static inline uint64_t __intrin_aes64esm(uint64_t rs1, uint64_t rs2) {
+    uint64_t rd;
+    __asm__ volatile (".insn r 0x33, 0, 0x1b, %0, %1, %2" : "=r"(rd) : "r"(rs1), "r"(rs2));
+    return rd;
+}
+
+static inline uint64_t __intrin_aes64ds(uint64_t rs1, uint64_t rs2) {
+    uint64_t rd;
+    __asm__ volatile (".insn r 0x33, 0, 0x1d, %0, %1, %2" : "=r"(rd) : "r"(rs1), "r"(rs2));
+    return rd;
+}
+
+static inline uint64_t __intrin_aes64dsm(uint64_t rs1, uint64_t rs2) {
+    uint64_t rd;
+    __asm__ volatile (".insn r 0x33, 0, 0x1f, %0, %1, %2" : "=r"(rd) : "r"(rs1), "r"(rs2));
+    return rd;
+}
+
+static inline uint64_t __intrin_aes64im(uint64_t rs1) {
+    uint64_t rd;
+    __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x300" : "=r"(rd) : "r"(rs1));
+    return rd;
+}
+
+static inline uint64_t __intrin_aes64ks1i(uint64_t rs1, uint32_t rnum) {
+    uint64_t rd;
+    switch (rnum & 0xf) {
+    case 0x0: __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x310" : "=r"(rd) : "r"(rs1)); break;
+    case 0x1: __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x311" : "=r"(rd) : "r"(rs1)); break;
+    case 0x2: __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x312" : "=r"(rd) : "r"(rs1)); break;
+    case 0x3: __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x313" : "=r"(rd) : "r"(rs1)); break;
+    case 0x4: __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x314" : "=r"(rd) : "r"(rs1)); break;
+    case 0x5: __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x315" : "=r"(rd) : "r"(rs1)); break;
+    case 0x6: __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x316" : "=r"(rd) : "r"(rs1)); break;
+    case 0x7: __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x317" : "=r"(rd) : "r"(rs1)); break;
+    case 0x8: __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x318" : "=r"(rd) : "r"(rs1)); break;
+    case 0x9: __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x319" : "=r"(rd) : "r"(rs1)); break;
+    case 0xA: __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x31a" : "=r"(rd) : "r"(rs1)); break;
+    default:  __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x31f" : "=r"(rd) : "r"(rs1)); break;
+    }
+    return rd;
+}
+
+static inline uint64_t __intrin_aes64ks2(uint64_t rs1, uint64_t rs2) {
+    uint64_t rd;
+    __asm__ volatile (".insn r 0x33, 0, 0x3f, %0, %1, %2" : "=r"(rd) : "r"(rs1), "r"(rs2));
+    return rd;
+}
+
+static inline uint64_t __intrin_pack_cols(uint32_t col0, uint32_t col1) {
+    return ((uint64_t)col1 << 32) | col0;
+}
+
+static inline void __intrin_unpack_cols(uint64_t packed, uint32_t *col0, uint32_t *col1) {
+    *col0 = (uint32_t)packed;
+    *col1 = (uint32_t)(packed >> 32);
+}
+#endif
+
 static inline uint32_t __intrin_aes_subword(uint32_t word) {
+#ifdef XLEN_64
+    uint64_t dup = __intrin_pack_cols(word, word);
+    return (uint32_t)__intrin_aes64es(dup, dup);
+#else
     uint32_t ret = 0;
     ret = __intrin_aes32esi(ret, word, 0);
     ret = __intrin_aes32esi(ret, word, 1);
     ret = __intrin_aes32esi(ret, word, 2);
     ret = __intrin_aes32esi(ret, word, 3);
     return ret;
+#endif
 }
 
 static inline void __intrin_aes_inv_mixcols(uint32_t *newcols, uint32_t *oldcols) {
+#ifdef XLEN_64
+    uint64_t lo = __intrin_pack_cols(oldcols[0], oldcols[1]);
+    uint64_t hi = __intrin_pack_cols(oldcols[2], oldcols[3]);
+    __intrin_unpack_cols(__intrin_aes64im(lo), &newcols[0], &newcols[1]);
+    __intrin_unpack_cols(__intrin_aes64im(hi), &newcols[2], &newcols[3]);
+#else
     uint32_t s0 = 0, s1 = 0, s2 = 0, s3 = 0;
 
     s0 = __intrin_aes32esi(s0, oldcols[0], 0);
@@ -348,9 +425,18 @@ static inline void __intrin_aes_inv_mixcols(uint32_t *newcols, uint32_t *oldcols
     newcols[3] = __intrin_aes32dsmi(newcols[3], s3, 1);
     newcols[3] = __intrin_aes32dsmi(newcols[3], s3, 2);
     newcols[3] = __intrin_aes32dsmi(newcols[3], s3, 3);
+#endif
 }
 
 static inline void __intrin_aes_last_enc_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
+#ifdef XLEN_64
+    uint64_t state_lo = __intrin_pack_cols(oldcols[0], oldcols[1]);
+    uint64_t state_hi = __intrin_pack_cols(oldcols[2], oldcols[3]);
+    uint64_t key_lo = __intrin_pack_cols(round_key[0], round_key[1]);
+    uint64_t key_hi = __intrin_pack_cols(round_key[2], round_key[3]);
+    __intrin_unpack_cols(__intrin_aes64es(state_lo, state_hi) ^ key_lo, &newcols[0], &newcols[1]);
+    __intrin_unpack_cols(__intrin_aes64es(state_hi, state_lo) ^ key_hi, &newcols[2], &newcols[3]);
+#else
     uint32_t o0 = oldcols[0], o1 = oldcols[1], o2 = oldcols[2], o3 = oldcols[3];
 
     newcols[0] = __intrin_aes32esi(round_key[0], o0, 0);
@@ -372,9 +458,18 @@ static inline void __intrin_aes_last_enc_round(uint32_t *newcols, const uint32_t
     newcols[3] = __intrin_aes32esi(newcols[3], o0, 1);
     newcols[3] = __intrin_aes32esi(newcols[3], o1, 2);
     newcols[3] = __intrin_aes32esi(newcols[3], o2, 3);
+#endif
 }
 
 static inline void __intrin_aes_enc_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
+#ifdef XLEN_64
+    uint64_t state_lo = __intrin_pack_cols(oldcols[0], oldcols[1]);
+    uint64_t state_hi = __intrin_pack_cols(oldcols[2], oldcols[3]);
+    uint64_t key_lo = __intrin_pack_cols(round_key[0], round_key[1]);
+    uint64_t key_hi = __intrin_pack_cols(round_key[2], round_key[3]);
+    __intrin_unpack_cols(__intrin_aes64esm(state_lo, state_hi) ^ key_lo, &newcols[0], &newcols[1]);
+    __intrin_unpack_cols(__intrin_aes64esm(state_hi, state_lo) ^ key_hi, &newcols[2], &newcols[3]);
+#else
     uint32_t o0 = oldcols[0], o1 = oldcols[1], o2 = oldcols[2], o3 = oldcols[3];
 
     newcols[0] = __intrin_aes32esmi(round_key[0], o0, 0);
@@ -396,9 +491,18 @@ static inline void __intrin_aes_enc_round(uint32_t *newcols, const uint32_t *old
     newcols[3] = __intrin_aes32esmi(newcols[3], o0, 1);
     newcols[3] = __intrin_aes32esmi(newcols[3], o1, 2);
     newcols[3] = __intrin_aes32esmi(newcols[3], o2, 3);
+#endif
 }
 
 static inline void __intrin_aes_last_dec_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
+#ifdef XLEN_64
+    uint64_t state_lo = __intrin_pack_cols(oldcols[0], oldcols[1]);
+    uint64_t state_hi = __intrin_pack_cols(oldcols[2], oldcols[3]);
+    uint64_t key_lo = __intrin_pack_cols(round_key[0], round_key[1]);
+    uint64_t key_hi = __intrin_pack_cols(round_key[2], round_key[3]);
+    __intrin_unpack_cols(__intrin_aes64ds(state_lo, state_hi) ^ key_lo, &newcols[0], &newcols[1]);
+    __intrin_unpack_cols(__intrin_aes64ds(state_hi, state_lo) ^ key_hi, &newcols[2], &newcols[3]);
+#else
     uint32_t o0 = oldcols[0], o1 = oldcols[1], o2 = oldcols[2], o3 = oldcols[3];
 
     newcols[0] = __intrin_aes32dsi(round_key[0], o0, 0);
@@ -420,9 +524,18 @@ static inline void __intrin_aes_last_dec_round(uint32_t *newcols, const uint32_t
     newcols[3] = __intrin_aes32dsi(newcols[3], o2, 1);
     newcols[3] = __intrin_aes32dsi(newcols[3], o1, 2);
     newcols[3] = __intrin_aes32dsi(newcols[3], o0, 3);
+#endif
 }
 
 static inline void __intrin_aes_dec_round(uint32_t *newcols, const uint32_t *oldcols, const uint32_t *round_key) {
+#ifdef XLEN_64
+    uint64_t state_lo = __intrin_pack_cols(oldcols[0], oldcols[1]);
+    uint64_t state_hi = __intrin_pack_cols(oldcols[2], oldcols[3]);
+    uint64_t key_lo = __intrin_pack_cols(round_key[0], round_key[1]);
+    uint64_t key_hi = __intrin_pack_cols(round_key[2], round_key[3]);
+    __intrin_unpack_cols(__intrin_aes64dsm(state_lo, state_hi) ^ key_lo, &newcols[0], &newcols[1]);
+    __intrin_unpack_cols(__intrin_aes64dsm(state_hi, state_lo) ^ key_hi, &newcols[2], &newcols[3]);
+#else
     uint32_t o0 = oldcols[0], o1 = oldcols[1], o2 = oldcols[2], o3 = oldcols[3];
 
     newcols[0] = __intrin_aes32dsmi(round_key[0], o0, 0);
@@ -444,6 +557,7 @@ static inline void __intrin_aes_dec_round(uint32_t *newcols, const uint32_t *old
     newcols[3] = __intrin_aes32dsmi(newcols[3], o2, 1);
     newcols[3] = __intrin_aes32dsmi(newcols[3], o1, 2);
     newcols[3] = __intrin_aes32dsmi(newcols[3], o0, 3);
+#endif
 }
 
 // Returns 1 if every active lane’s predicate is true, 0 otherwise.

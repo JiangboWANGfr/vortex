@@ -26,9 +26,11 @@ Socket::Socket(const SimContext& ctx,
   , mem_rsp_ports(L1_MEM_PORTS, this)
   , socket_id_(socket_id)
   , cluster_(cluster)
-  , cores_(arch.socket_size())
+  , cores_()
 {
-  auto cores_per_socket = cores_.size();
+  uint32_t first_core_id = socket_id * arch.socket_size();
+  uint32_t cores_per_socket = std::min<uint32_t>(arch.socket_size(), arch.num_cores() - first_core_id);
+  cores_.resize(cores_per_socket);
 
   char sname[100];
   snprintf(sname, 100, "%s-icaches", this->name().c_str());

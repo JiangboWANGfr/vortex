@@ -100,6 +100,13 @@ void AluUnit::tick() {
 			case AesType::ESMI:
 			case AesType::DSI:
 			case AesType::DSMI:
+			case AesType::ES64:
+			case AesType::ESM64:
+			case AesType::DS64:
+			case AesType::DSM64:
+			case AesType::IM64:
+			case AesType::KS1I64:
+			case AesType::KS2_64:
 				delay = 2;
 				break;
 			default:

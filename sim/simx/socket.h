@@ -47,6 +47,10 @@ public:
     return socket_id_;
   }
 
+  uint32_t num_cores() const {
+    return cores_.size();
+  }
+
   Cluster* cluster() const {
     return cluster_;
   }

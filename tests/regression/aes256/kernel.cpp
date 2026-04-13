@@ -83,7 +83,8 @@ void aes_worker(const TaskArgs* __UNIFORM__ args) {
     break;
   case AesMode::CBC_DEC: {
     uintptr_t first_iv = reinterpret_cast<uintptr_t>(args->iv);
-    uintptr_t prev_ct = reinterpret_cast<uintptr_t>(args->input) + offset - BLOCK_SIZE;
+    uintptr_t prev_delta = BLOCK_SIZE & (0u - static_cast<uintptr_t>(offset != 0));
+    uintptr_t prev_ct = reinterpret_cast<uintptr_t>(args->input) + offset - prev_delta;
     uintptr_t use_iv_mask = 0u - static_cast<uintptr_t>(offset == 0);
     uintptr_t iv_addr = prev_ct ^ ((prev_ct ^ first_iv) & use_iv_mask);
     const uint8_t* iv = reinterpret_cast<const uint8_t*>(iv_addr);

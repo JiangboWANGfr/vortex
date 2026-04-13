@@ -136,6 +136,115 @@ static inline uint32_t aes32dsi(bool inv_mix_columns, uint32_t byte_select, uint
   }
 }
 
+static inline uint32_t aes_subbytes_fwd(uint32_t word) {
+  uint32_t result = 0;
+  for (uint32_t i = 0; i < 4; ++i) {
+    auto byte = (word >> (i * 8)) & 0xff;
+    result |= uint32_t(aes_sbox(byte)) << (i * 8);
+  }
+  return result;
+}
+
+static inline uint32_t aes_subbytes_inv(uint32_t word) {
+  uint32_t result = 0;
+  for (uint32_t i = 0; i < 4; ++i) {
+    auto byte = (word >> (i * 8)) & 0xff;
+    result |= uint32_t(aes_inv_sbox(byte)) << (i * 8);
+  }
+  return result;
+}
+
+static inline uint8_t aes_col_byte(uint32_t word, uint32_t idx) {
+  return (word >> (idx * 8)) & 0xff;
+}
+
+static inline uint32_t aes_pack_bytes(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3) {
+  return uint32_t(b0)
+       | (uint32_t(b1) << 8)
+       | (uint32_t(b2) << 16)
+       | (uint32_t(b3) << 24);
+}
+
+static inline uint32_t aes_mixcolumn_fwd(uint32_t word) {
+  uint8_t b0 = aes_col_byte(word, 0);
+  uint8_t b1 = aes_col_byte(word, 1);
+  uint8_t b2 = aes_col_byte(word, 2);
+  uint8_t b3 = aes_col_byte(word, 3);
+  return aes_pack_bytes(
+    aes_xtime(b0) ^ b1 ^ aes_xtime(b1) ^ b2 ^ b3,
+    b0 ^ aes_xtime(b1) ^ b2 ^ aes_xtime(b2) ^ b3,
+    b0 ^ b1 ^ aes_xtime(b2) ^ b3 ^ aes_xtime(b3),
+    b0 ^ aes_xtime(b0) ^ b1 ^ b2 ^ aes_xtime(b3)
+  );
+}
+
+static inline uint32_t aes_mixcolumn_inv(uint32_t word) {
+  uint8_t b0 = aes_col_byte(word, 0);
+  uint8_t b1 = aes_col_byte(word, 1);
+  uint8_t b2 = aes_col_byte(word, 2);
+  uint8_t b3 = aes_col_byte(word, 3);
+
+  uint8_t x0 = aes_xtime(b0), x1 = aes_xtime(b1), x2 = aes_xtime(b2), x3 = aes_xtime(b3);
+  uint8_t x20 = aes_xtime(x0), x21 = aes_xtime(x1), x22 = aes_xtime(x2), x23 = aes_xtime(x3);
+  uint8_t x30 = aes_xtime(x20), x31 = aes_xtime(x21), x32 = aes_xtime(x22), x33 = aes_xtime(x23);
+
+  return aes_pack_bytes(
+    x0 ^ x20 ^ x30 ^ b1 ^ x1 ^ x31 ^ b2 ^ x22 ^ x32 ^ b3 ^ x33,
+    b0 ^ x30 ^ x1 ^ x21 ^ x31 ^ b2 ^ x2 ^ x32 ^ b3 ^ x23 ^ x33,
+    b0 ^ x20 ^ x30 ^ b1 ^ x31 ^ x2 ^ x22 ^ x32 ^ b3 ^ x3 ^ x33,
+    b0 ^ x0 ^ x30 ^ b1 ^ x21 ^ x31 ^ b2 ^ x32 ^ x3 ^ x23 ^ x33
+  );
+}
+
+static inline uint64_t aes_pack_cols(uint32_t c0, uint32_t c1) {
+  return uint64_t(c0) | (uint64_t(c1) << 32);
+}
+
+static inline uint64_t aes64_shiftrows_fwd(uint64_t rs1, uint64_t rs2) {
+  uint32_t a0 = rs1 & 0xffffffffu;
+  uint32_t a1 = (rs1 >> 32) & 0xffffffffu;
+  uint32_t b0 = rs2 & 0xffffffffu;
+  uint32_t b1 = (rs2 >> 32) & 0xffffffffu;
+  uint32_t o0 = aes_pack_bytes(
+    aes_col_byte(a0, 0), aes_col_byte(a1, 1), aes_col_byte(b0, 2), aes_col_byte(b1, 3));
+  uint32_t o1 = aes_pack_bytes(
+    aes_col_byte(a1, 0), aes_col_byte(b0, 1), aes_col_byte(b1, 2), aes_col_byte(a0, 3));
+  return aes_pack_cols(o0, o1);
+}
+
+static inline uint64_t aes64_shiftrows_inv(uint64_t rs1, uint64_t rs2) {
+  uint32_t a0 = rs1 & 0xffffffffu;
+  uint32_t a1 = (rs1 >> 32) & 0xffffffffu;
+  uint32_t b0 = rs2 & 0xffffffffu;
+  uint32_t b1 = (rs2 >> 32) & 0xffffffffu;
+  uint32_t o0 = aes_pack_bytes(
+    aes_col_byte(a0, 0), aes_col_byte(b1, 1), aes_col_byte(b0, 2), aes_col_byte(a1, 3));
+  uint32_t o1 = aes_pack_bytes(
+    aes_col_byte(a1, 0), aes_col_byte(a0, 1), aes_col_byte(b1, 2), aes_col_byte(b0, 3));
+  return aes_pack_cols(o0, o1);
+}
+
+static inline uint64_t aes64_apply_sbox_fwd(uint64_t value) {
+  uint32_t lo = aes_subbytes_fwd(value & 0xffffffffu);
+  uint32_t hi = aes_subbytes_fwd((value >> 32) & 0xffffffffu);
+  return aes_pack_cols(lo, hi);
+}
+
+static inline uint64_t aes64_apply_sbox_inv(uint64_t value) {
+  uint32_t lo = aes_subbytes_inv(value & 0xffffffffu);
+  uint32_t hi = aes_subbytes_inv((value >> 32) & 0xffffffffu);
+  return aes_pack_cols(lo, hi);
+}
+
+static inline uint32_t aes_rcon(uint32_t round) {
+  static const uint32_t table[] = {
+    0x00000000, 0x00000001, 0x00000002, 0x00000004,
+    0x00000008, 0x00000010, 0x00000020, 0x00000040,
+    0x00000080, 0x0000001b, 0x00000036
+  };
+  return table[round];
+}
+
 void Emulator::fetch_registers(std::vector<reg_data_t>& out, uint32_t wid, uint32_t src_index, const RegOpd& reg) {
   __unused(src_index);
   auto& warp = warps_.at(wid);
@@ -753,17 +862,60 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
           continue;
         switch (aes_type) {
         case AesType::ESI:
-          rd_data[t].u = rs1_data[t].u ^ aes32esi(false, aesArgs.byte_select, rs2_data[t].u32);
+          rd_data[t].u = rs1_data[t].u ^ aes32esi(false, aesArgs.imm, rs2_data[t].u32);
           break;
         case AesType::ESMI:
-          rd_data[t].u = rs1_data[t].u ^ aes32esi(true, aesArgs.byte_select, rs2_data[t].u32);
+          rd_data[t].u = rs1_data[t].u ^ aes32esi(true, aesArgs.imm, rs2_data[t].u32);
           break;
         case AesType::DSI:
-          rd_data[t].u = rs1_data[t].u ^ aes32dsi(false, aesArgs.byte_select, rs2_data[t].u32);
+          rd_data[t].u = rs1_data[t].u ^ aes32dsi(false, aesArgs.imm, rs2_data[t].u32);
           break;
         case AesType::DSMI:
-          rd_data[t].u = rs1_data[t].u ^ aes32dsi(true, aesArgs.byte_select, rs2_data[t].u32);
+          rd_data[t].u = rs1_data[t].u ^ aes32dsi(true, aesArgs.imm, rs2_data[t].u32);
           break;
+        case AesType::ES64: {
+          auto shifted = aes64_shiftrows_fwd(rs1_data[t].u64, rs2_data[t].u64);
+          rd_data[t].u64 = aes64_apply_sbox_fwd(shifted);
+        } break;
+        case AesType::ESM64: {
+          auto shifted = aes64_shiftrows_fwd(rs1_data[t].u64, rs2_data[t].u64);
+          auto subbed = aes64_apply_sbox_fwd(shifted);
+          uint32_t lo = aes_mixcolumn_fwd(subbed & 0xffffffffu);
+          uint32_t hi = aes_mixcolumn_fwd((subbed >> 32) & 0xffffffffu);
+          rd_data[t].u64 = aes_pack_cols(lo, hi);
+        } break;
+        case AesType::DS64: {
+          auto shifted = aes64_shiftrows_inv(rs1_data[t].u64, rs2_data[t].u64);
+          rd_data[t].u64 = aes64_apply_sbox_inv(shifted);
+        } break;
+        case AesType::DSM64: {
+          auto shifted = aes64_shiftrows_inv(rs1_data[t].u64, rs2_data[t].u64);
+          auto subbed = aes64_apply_sbox_inv(shifted);
+          uint32_t lo = aes_mixcolumn_inv(subbed & 0xffffffffu);
+          uint32_t hi = aes_mixcolumn_inv((subbed >> 32) & 0xffffffffu);
+          rd_data[t].u64 = aes_pack_cols(lo, hi);
+        } break;
+        case AesType::IM64: {
+          uint32_t lo = aes_mixcolumn_inv(rs1_data[t].u64 & 0xffffffffu);
+          uint32_t hi = aes_mixcolumn_inv((rs1_data[t].u64 >> 32) & 0xffffffffu);
+          rd_data[t].u64 = aes_pack_cols(lo, hi);
+        } break;
+        case AesType::KS1I64: {
+          uint32_t tmp1 = (rs1_data[t].u64 >> 32) & 0xffffffffu;
+          uint32_t tmp2 = (aesArgs.imm == 0xA)
+                        ? tmp1
+                        : ((tmp1 >> 8) | (tmp1 << 24));
+          uint32_t tmp3 = aes_subbytes_fwd(tmp2) ^ aes_rcon(aesArgs.imm);
+          rd_data[t].u64 = aes_pack_cols(tmp3, tmp3);
+        } break;
+        case AesType::KS2_64: {
+          uint32_t rs1_hi = (rs1_data[t].u64 >> 32) & 0xffffffffu;
+          uint32_t rs2_lo = rs2_data[t].u64 & 0xffffffffu;
+          uint32_t rs2_hi = (rs2_data[t].u64 >> 32) & 0xffffffffu;
+          uint32_t w0 = rs1_hi ^ rs2_lo;
+          uint32_t w1 = w0 ^ rs2_hi;
+          rd_data[t].u64 = aes_pack_cols(w0, w1);
+        } break;
         default:
           std::abort();
         }
