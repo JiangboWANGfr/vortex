@@ -32,8 +32,21 @@ module VX_crypto_aes import VX_gpu_pkg::*; #(
     wire do_esmi = (execute_if.data.op_type == INST_CRYPTO_AES32ESMI);
     wire do_dsi  = (execute_if.data.op_type == INST_CRYPTO_AES32DSI);
     wire do_dsmi = (execute_if.data.op_type == INST_CRYPTO_AES32DSMI);
+    wire is_aes32 = do_esi || do_esmi || do_dsi || do_dsmi;
+
+`ifdef XLEN_64
+    wire do_aes64es   = (execute_if.data.op_type == INST_CRYPTO_AES64ES);
+    wire do_aes64esm  = (execute_if.data.op_type == INST_CRYPTO_AES64ESM);
+    wire do_aes64ds   = (execute_if.data.op_type == INST_CRYPTO_AES64DS);
+    wire do_aes64dsm  = (execute_if.data.op_type == INST_CRYPTO_AES64DSM);
+    wire do_aes64im   = (execute_if.data.op_type == INST_CRYPTO_AES64IM);
+    wire do_aes64ks1i = (execute_if.data.op_type == INST_CRYPTO_AES64KS1I);
+    wire do_aes64ks2  = (execute_if.data.op_type == INST_CRYPTO_AES64KS2);
+    wire is_aes64 = do_aes64es || do_aes64esm || do_aes64ds || do_aes64dsm || do_aes64im || do_aes64ks1i || do_aes64ks2;
+`endif
 
     wire [1:0] byte_select = execute_if.data.op_args.crypto.byte_select;
+    wire [3:0] round_imm = execute_if.data.op_args.crypto.round_imm;
 
     wire [NUM_LANES-1:0][31:0] rs1_data;
     wire [NUM_LANES-1:0][31:0] rs2_data;
@@ -43,8 +56,8 @@ module VX_crypto_aes import VX_gpu_pkg::*; #(
     end
 
     wire [NUM_LANES-1:0][31:0] crypto_result;
-    wire crypto_ready_in;
-    wire crypto_valid_out;
+    wire crypto32_ready_in;
+    wire crypto32_valid_out;
 
     VX_aes #(
         .LANES (NUM_LANES)
@@ -59,13 +72,51 @@ module VX_crypto_aes import VX_gpu_pkg::*; #(
         .op_saes32_decs (do_dsi),
         .op_saes32_decsm(do_dsmi),
         .result         (crypto_result),
-        .valid_in       (execute_if.valid),
-        .ready_in       (crypto_ready_in),
-        .valid_out      (crypto_valid_out),
+        .valid_in       (execute_if.valid && is_aes32),
+        .ready_in       (crypto32_ready_in),
+        .valid_out      (crypto32_valid_out),
         .ready_out      (result_if.ready)
     );
 
-    assign execute_if.ready = crypto_ready_in;
+`ifdef XLEN_64
+    wire [NUM_LANES-1:0][63:0] rs1_data_64 = execute_if.data.rs1_data;
+    wire [NUM_LANES-1:0][63:0] rs2_data_64 = execute_if.data.rs2_data;
+    wire [NUM_LANES-1:0][63:0] crypto64_result;
+    wire crypto64_ready_in;
+    wire crypto64_valid_out;
+
+    VX_aes64 #(
+        .LANES (NUM_LANES)
+    ) aes64_unit (
+        .clk         (clk),
+        .reset       (reset),
+        .rs1_data    (rs1_data_64),
+        .rs2_data    (rs2_data_64),
+        .round_imm   (round_imm),
+        .op_aes64es  (do_aes64es),
+        .op_aes64esm (do_aes64esm),
+        .op_aes64ds  (do_aes64ds),
+        .op_aes64dsm (do_aes64dsm),
+        .op_aes64im  (do_aes64im),
+        .op_aes64ks1i(do_aes64ks1i),
+        .op_aes64ks2 (do_aes64ks2),
+        .result      (crypto64_result),
+        .valid_in    (execute_if.valid && is_aes64),
+        .ready_in    (crypto64_ready_in),
+        .valid_out   (crypto64_valid_out),
+        .ready_out   (result_if.ready)
+    );
+
+    wire selected_ready_in = is_aes32 ? crypto32_ready_in : crypto64_ready_in;
+    wire selected_valid_out = crypto32_valid_out || crypto64_valid_out;
+    wire pending_valid_out = crypto32_valid_out || crypto64_valid_out;
+
+    assign execute_if.ready = selected_ready_in && (~pending_valid_out || result_if.ready);
+`else
+    wire selected_ready_in = crypto32_ready_in;
+    wire selected_valid_out = crypto32_valid_out;
+    assign execute_if.ready = selected_ready_in;
+`endif
 
     VX_pipe_register #(
         .DATAW  (META_DATAW),
@@ -73,7 +124,7 @@ module VX_crypto_aes import VX_gpu_pkg::*; #(
     ) meta_pipe (
         .clk      (clk),
         .reset    (reset),
-        .enable   (crypto_ready_in),
+        .enable   (execute_if.ready),
         .data_in  ({execute_if.data.uuid, execute_if.data.wid, execute_if.data.tmask,
                     execute_if.data.PC, execute_if.data.wb, execute_if.data.rd, execute_if.data.pid,
                     execute_if.data.sop, execute_if.data.eop}),
@@ -82,10 +133,14 @@ module VX_crypto_aes import VX_gpu_pkg::*; #(
                     result_if.data.sop, result_if.data.eop})
     );
 
-    assign result_if.valid = crypto_valid_out;
+    assign result_if.valid = selected_valid_out;
 
     for (genvar i = 0; i < NUM_LANES; ++i) begin : g_wb_data
+    `ifdef XLEN_64
+        assign result_if.data.data[i] = crypto32_valid_out ? `XLEN'(crypto_result[i]) : `XLEN'(crypto64_result[i]);
+    `else
         assign result_if.data.data[i] = `XLEN'(crypto_result[i]);
+    `endif
     end
 
 endmodule

@@ -166,6 +166,23 @@ module VX_decode import VX_gpu_pkg::*; #(
                 op_args.alu.imm = `SEXT(`XLEN, i_imm);
                 `USED_IREG (rd);
                 `USED_IREG (rs1);
+            `ifdef XLEN_64
+                if (funct3 == 3'h1) begin
+                    if (u_12 == 12'h300) begin
+                        ex_type = EX_CRYPTO;
+                        op_args.crypto.unit = CRYPTO_CLASS_AES;
+                        op_args.crypto.byte_select = '0;
+                        op_args.crypto.round_imm = '0;
+                        op_type = INST_OP_BITS'(INST_CRYPTO_AES64IM);
+                    end else if (u_12[11:4] == 8'h31 && u_12[3:0] <= 4'ha) begin
+                        ex_type = EX_CRYPTO;
+                        op_args.crypto.unit = CRYPTO_CLASS_AES;
+                        op_args.crypto.byte_select = '0;
+                        op_args.crypto.round_imm = u_12[3:0];
+                        op_type = INST_OP_BITS'(INST_CRYPTO_AES64KS1I);
+                    end
+                end
+            `endif
             end
             INST_R: begin
                 ex_type = EX_ALU;
@@ -175,10 +192,27 @@ module VX_decode import VX_gpu_pkg::*; #(
                 `USED_IREG (rd);
                 `USED_IREG (rs1);
                 `USED_IREG (rs2);
+            `ifdef XLEN_64
+                if (funct3 == 3'h0 && (funct7 == 7'h19 || funct7 == 7'h1b || funct7 == 7'h1d || funct7 == 7'h1f || funct7 == 7'h3f)) begin
+                    ex_type = EX_CRYPTO;
+                    op_args.crypto.unit = CRYPTO_CLASS_AES;
+                    op_args.crypto.byte_select = '0;
+                    op_args.crypto.round_imm = '0;
+                    case (funct7)
+                        7'h19: op_type = INST_OP_BITS'(INST_CRYPTO_AES64ES);
+                        7'h1b: op_type = INST_OP_BITS'(INST_CRYPTO_AES64ESM);
+                        7'h1d: op_type = INST_OP_BITS'(INST_CRYPTO_AES64DS);
+                        7'h1f: op_type = INST_OP_BITS'(INST_CRYPTO_AES64DSM);
+                        7'h3f: op_type = INST_OP_BITS'(INST_CRYPTO_AES64KS2);
+                        default: ;
+                    endcase
+                end else begin
+            `else
                 if (funct3 == 3'h0 && ((funct7 & 7'h19) == 7'h19)) begin
                     ex_type = EX_CRYPTO;
                     op_args.crypto.unit = CRYPTO_CLASS_AES;
                     op_args.crypto.byte_select = funct7[6:5];
+                    op_args.crypto.round_imm = '0;
                     case (funct7[2:1])
                         2'b00: op_type = INST_OP_BITS'(INST_CRYPTO_AES32ESI);
                         2'b01: op_type = INST_OP_BITS'(INST_CRYPTO_AES32ESMI);
@@ -186,6 +220,7 @@ module VX_decode import VX_gpu_pkg::*; #(
                         2'b11: op_type = INST_OP_BITS'(INST_CRYPTO_AES32DSMI);
                     endcase
                 end else begin
+            `endif
                     case (funct7)
                     `ifdef EXT_M_ENABLE
                         INST_R_F7_MUL: begin

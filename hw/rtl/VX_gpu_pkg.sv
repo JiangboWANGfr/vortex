@@ -277,6 +277,13 @@ package VX_gpu_pkg;
     localparam INST_CRYPTO_AES32ESMI = 4'b1001;
     localparam INST_CRYPTO_AES32DSI  = 4'b1010;
     localparam INST_CRYPTO_AES32DSMI = 4'b1011;
+    localparam INST_CRYPTO_AES64ES   = 4'b1100;
+    localparam INST_CRYPTO_AES64ESM  = 4'b1101;
+    localparam INST_CRYPTO_AES64DS   = 4'b1110;
+    localparam INST_CRYPTO_AES64DSM  = 4'b1111;
+    localparam INST_CRYPTO_AES64IM   = 4'b0000;
+    localparam INST_CRYPTO_AES64KS1I = 4'b0001;
+    localparam INST_CRYPTO_AES64KS2  = 4'b0010;
 
     localparam CRYPTO_CLASS_BITS = 2;
     localparam CRYPTO_CLASS_AES  = 2'd0;
@@ -543,9 +550,10 @@ package VX_gpu_pkg;
     `PACKAGE_ASSERT($bits(wctl_args_t) == INST_ARGS_BITS)
 
     typedef struct packed {
-        logic [(INST_ARGS_BITS-CRYPTO_CLASS_BITS-2)-1:0] __padding;
+        logic [(INST_ARGS_BITS-CRYPTO_CLASS_BITS-2-4)-1:0] __padding;
         logic [CRYPTO_CLASS_BITS-1:0] unit;
         logic [1:0] byte_select;
+        logic [3:0] round_imm;
     } crypto_args_t;
     `PACKAGE_ASSERT($bits(crypto_args_t) == INST_ARGS_BITS)
 

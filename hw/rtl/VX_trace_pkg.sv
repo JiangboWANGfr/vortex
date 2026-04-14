@@ -179,6 +179,13 @@ package VX_trace_pkg;
                 INST_CRYPTO_AES32ESMI: `TRACE(level, ("AES32ESMI"))
                 INST_CRYPTO_AES32DSI:  `TRACE(level, ("AES32DSI"))
                 INST_CRYPTO_AES32DSMI: `TRACE(level, ("AES32DSMI"))
+                INST_CRYPTO_AES64ES:   `TRACE(level, ("AES64ES"))
+                INST_CRYPTO_AES64ESM:  `TRACE(level, ("AES64ESM"))
+                INST_CRYPTO_AES64DS:   `TRACE(level, ("AES64DS"))
+                INST_CRYPTO_AES64DSM:  `TRACE(level, ("AES64DSM"))
+                INST_CRYPTO_AES64IM:   `TRACE(level, ("AES64IM"))
+                INST_CRYPTO_AES64KS1I: `TRACE(level, ("AES64KS1I"))
+                INST_CRYPTO_AES64KS2:  `TRACE(level, ("AES64KS2"))
                 default:               `TRACE(level, ("?"))
             endcase
         end
@@ -434,7 +441,7 @@ package VX_trace_pkg;
             end
         end
         EX_CRYPTO: begin
-            `TRACE(level, ("unit=0x%0h, byte_sel=0x%0h", op_args.crypto.unit, op_args.crypto.byte_select))
+            `TRACE(level, ("unit=0x%0h, byte_sel=0x%0h, round_imm=0x%0h", op_args.crypto.unit, op_args.crypto.byte_select, op_args.crypto.round_imm))
         end
     `ifdef EXT_F_ENABLE
         EX_FPU: begin

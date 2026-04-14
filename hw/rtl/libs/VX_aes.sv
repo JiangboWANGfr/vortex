@@ -742,3 +742,186 @@ module VX_aes #(
     end
 
 endmodule
+
+module VX_aes64 #(
+    parameter LANES = 1
+) (
+    input  wire                     clk,
+    input  wire                     reset,
+    input  wire [LANES-1:0][63:0]   rs1_data,
+    input  wire [LANES-1:0][63:0]   rs2_data,
+    input  wire [3:0]               round_imm,
+    input  wire                     op_aes64es,
+    input  wire                     op_aes64esm,
+    input  wire                     op_aes64ds,
+    input  wire                     op_aes64dsm,
+    input  wire                     op_aes64im,
+    input  wire                     op_aes64ks1i,
+    input  wire                     op_aes64ks2,
+    output wire [LANES-1:0][63:0]   result,
+    input  wire                     valid_in,
+    output wire                     ready_in,
+    output wire                     valid_out,
+    input  wire                     ready_out
+);
+    function automatic [7:0] xtime2(input [7:0] a);
+        xtime2 = {a[6:0], 1'b0} ^ (a[7] ? 8'h1b : 8'b0);
+    endfunction
+
+    function automatic [7:0] xtimeN(
+        input [7:0] a,
+        input [3:0] b
+    );
+        xtimeN =
+            (b[0] ? a : 0) ^
+            (b[1] ? xtime2(a) : 0) ^
+            (b[2] ? xtime2(xtime2(a)) : 0) ^
+            (b[3] ? xtime2(xtime2(xtime2(a))) : 0);
+    endfunction
+
+    function automatic [31:0] pack_bytes(
+        input [7:0] b0,
+        input [7:0] b1,
+        input [7:0] b2,
+        input [7:0] b3
+    );
+        pack_bytes = {b3, b2, b1, b0};
+    endfunction
+
+    function automatic [31:0] mixcolumn_fwd(input [31:0] word);
+        reg [7:0] b0, b1, b2, b3;
+        begin
+            b0 = word[7:0];
+            b1 = word[15:8];
+            b2 = word[23:16];
+            b3 = word[31:24];
+            mixcolumn_fwd = pack_bytes(
+                xtime2(b0) ^ b1 ^ xtime2(b1) ^ b2 ^ b3,
+                b0 ^ xtime2(b1) ^ b2 ^ xtime2(b2) ^ b3,
+                b0 ^ b1 ^ xtime2(b2) ^ b3 ^ xtime2(b3),
+                b0 ^ xtime2(b0) ^ b1 ^ b2 ^ xtime2(b3)
+            );
+        end
+    endfunction
+
+    function automatic [31:0] mixcolumn_inv(input [31:0] word);
+        reg [7:0] b0, b1, b2, b3;
+        reg [7:0] x0, x1, x2, x3;
+        reg [7:0] x20, x21, x22, x23;
+        reg [7:0] x30, x31, x32, x33;
+        begin
+            b0 = word[7:0];
+            b1 = word[15:8];
+            b2 = word[23:16];
+            b3 = word[31:24];
+            x0 = xtime2(b0);
+            x1 = xtime2(b1);
+            x2 = xtime2(b2);
+            x3 = xtime2(b3);
+            x20 = xtime2(x0);
+            x21 = xtime2(x1);
+            x22 = xtime2(x2);
+            x23 = xtime2(x3);
+            x30 = xtime2(x20);
+            x31 = xtime2(x21);
+            x32 = xtime2(x22);
+            x33 = xtime2(x23);
+            mixcolumn_inv = pack_bytes(
+                x0 ^ x20 ^ x30 ^ b1 ^ x1 ^ x31 ^ b2 ^ x22 ^ x32 ^ b3 ^ x33,
+                b0 ^ x30 ^ x1 ^ x21 ^ x31 ^ b2 ^ x2 ^ x32 ^ b3 ^ x23 ^ x33,
+                b0 ^ x20 ^ x30 ^ b1 ^ x31 ^ x2 ^ x22 ^ x32 ^ b3 ^ x3 ^ x33,
+                b0 ^ x0 ^ x30 ^ b1 ^ x21 ^ x31 ^ b2 ^ x32 ^ x3 ^ x23 ^ x33
+            );
+        end
+    endfunction
+
+    function automatic [31:0] aes_rcon(input [3:0] round);
+        case (round)
+            4'd0: aes_rcon = 32'h00000000;
+            4'd1: aes_rcon = 32'h00000001;
+            4'd2: aes_rcon = 32'h00000002;
+            4'd3: aes_rcon = 32'h00000004;
+            4'd4: aes_rcon = 32'h00000008;
+            4'd5: aes_rcon = 32'h00000010;
+            4'd6: aes_rcon = 32'h00000020;
+            4'd7: aes_rcon = 32'h00000040;
+            4'd8: aes_rcon = 32'h00000080;
+            4'd9: aes_rcon = 32'h0000001b;
+            4'd10: aes_rcon = 32'h00000036;
+            default: aes_rcon = 32'h00000000;
+        endcase
+    endfunction
+
+    wire [LANES-1:0][7:0][7:0] fwd_sbox_in;
+    wire [LANES-1:0][7:0][7:0] inv_sbox_in;
+    wire [LANES-1:0][7:0][7:0] fwd_sbox_out;
+    wire [LANES-1:0][7:0][7:0] inv_sbox_out;
+
+    wire [LANES-1:0][63:0] result_next;
+    reg  [LANES-1:0][63:0] result_r;
+    reg                    valid_r;
+
+    assign ready_in = ~valid_r || ready_out;
+    assign valid_out = valid_r;
+    assign result = result_r;
+
+    for (genvar i = 0; i < LANES; ++i) begin : g_lane
+        wire [31:0] rs1_lo = rs1_data[i][31:0];
+        wire [31:0] rs1_hi = rs1_data[i][63:32];
+        wire [31:0] rs2_lo = rs2_data[i][31:0];
+        wire [31:0] rs2_hi = rs2_data[i][63:32];
+
+        wire [31:0] shift_fwd_lo = pack_bytes(rs1_lo[7:0], rs1_hi[15:8], rs2_lo[23:16], rs2_hi[31:24]);
+        wire [31:0] shift_fwd_hi = pack_bytes(rs1_hi[7:0], rs2_lo[15:8], rs2_hi[23:16], rs1_lo[31:24]);
+        wire [31:0] shift_inv_lo = pack_bytes(rs1_lo[7:0], rs2_hi[15:8], rs2_lo[23:16], rs1_hi[31:24]);
+        wire [31:0] shift_inv_hi = pack_bytes(rs1_hi[7:0], rs1_lo[15:8], rs2_hi[23:16], rs2_lo[31:24]);
+        wire [31:0] ks1_word = (round_imm == 4'ha) ? rs1_hi : {rs1_hi[7:0], rs1_hi[31:8]};
+
+        for (genvar j = 0; j < 8; ++j) begin : g_sbox
+            wire [7:0] shift_fwd_byte = (j < 4) ? shift_fwd_lo[(8 * j) +: 8] : shift_fwd_hi[(8 * (j - 4)) +: 8];
+            wire [7:0] shift_inv_byte = (j < 4) ? shift_inv_lo[(8 * j) +: 8] : shift_inv_hi[(8 * (j - 4)) +: 8];
+            assign fwd_sbox_in[i][j] = op_aes64ks1i ? ((j < 4) ? ks1_word[(8 * j) +: 8] : 8'h00) : shift_fwd_byte;
+            assign inv_sbox_in[i][j] = shift_inv_byte;
+            riscv_crypto_sbox_aes_lut  fwd_sbox (.out(fwd_sbox_out[i][j]), .in(fwd_sbox_in[i][j]));
+            riscv_crypto_sbox_aesi_lut inv_sbox (.out(inv_sbox_out[i][j]), .in(inv_sbox_in[i][j]));
+        end
+
+        wire [31:0] sub_fwd_lo = pack_bytes(fwd_sbox_out[i][0], fwd_sbox_out[i][1], fwd_sbox_out[i][2], fwd_sbox_out[i][3]);
+        wire [31:0] sub_fwd_hi = pack_bytes(fwd_sbox_out[i][4], fwd_sbox_out[i][5], fwd_sbox_out[i][6], fwd_sbox_out[i][7]);
+        wire [31:0] sub_inv_lo = pack_bytes(inv_sbox_out[i][0], inv_sbox_out[i][1], inv_sbox_out[i][2], inv_sbox_out[i][3]);
+        wire [31:0] sub_inv_hi = pack_bytes(inv_sbox_out[i][4], inv_sbox_out[i][5], inv_sbox_out[i][6], inv_sbox_out[i][7]);
+
+        reg [63:0] lane_result;
+        always @(*) begin
+            lane_result = '0;
+            if (op_aes64es) begin
+                lane_result = {sub_fwd_hi, sub_fwd_lo};
+            end else if (op_aes64esm) begin
+                lane_result = {mixcolumn_fwd(sub_fwd_hi), mixcolumn_fwd(sub_fwd_lo)};
+            end else if (op_aes64ds) begin
+                lane_result = {sub_inv_hi, sub_inv_lo};
+            end else if (op_aes64dsm) begin
+                lane_result = {mixcolumn_inv(sub_inv_hi), mixcolumn_inv(sub_inv_lo)};
+            end else if (op_aes64im) begin
+                lane_result = {mixcolumn_inv(rs1_hi), mixcolumn_inv(rs1_lo)};
+            end else if (op_aes64ks1i) begin
+                lane_result = {sub_fwd_lo ^ aes_rcon(round_imm), sub_fwd_lo ^ aes_rcon(round_imm)};
+            end else if (op_aes64ks2) begin
+                lane_result[31:0] = rs1_hi ^ rs2_lo;
+                lane_result[63:32] = (rs1_hi ^ rs2_lo) ^ rs2_hi;
+            end
+        end
+
+        assign result_next[i] = lane_result;
+    end
+
+    always @(posedge clk) begin
+        if (reset) begin
+            valid_r <= 1'b0;
+        end else if (ready_in) begin
+            valid_r <= valid_in;
+            result_r <= result_next;
+        end
+    end
+
+endmodule
