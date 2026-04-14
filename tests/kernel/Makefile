@@ -26,7 +26,7 @@ run-rtlsim:
 	$(MAKE) -C vecadd run-rtlsim
 	$(MAKE) -C aes_smoke run-rtlsim
 	$(MAKE) -C aes256 run-rtlsim
-	$(MAKE) -C sha256 run-rtlsim SHA_ACCEL_MODE=SOFTWARE
+	$(MAKE) -C sha256 run-rtlsim
 	
 clean:
 	$(MAKE) -C conform clean

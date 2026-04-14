@@ -22,15 +22,14 @@ Options:
   --ext-d-disable                   Build with EXT_D_DISABLE=1
   --fd-disable                      Shorthand for both ext-f-disable and ext-d-disable
   --debug=<level>                   Debug level passed to simulators (default: 0)
-  --include-rtlsim-native           Also run rtlsim+NATIVE once RTL SHA support exists
+  --include-rtlsim-native           Compatibility no-op; rtlsim+NATIVE now runs by default
   --help                            Show this help
 
 Supported SHA_ACCEL_MODE values:
   NATIVE, SOFTWARE
 
 Development default:
-  simx runs NATIVE and SOFTWARE. rtlsim runs SOFTWARE only because SHA RTL is
-  intentionally not wired up yet.
+  simx and rtlsim run the requested NATIVE and SOFTWARE modes.
 
 Example:
   $0 --drivers=simx,rtlsim --accel-modes=NATIVE,SOFTWARE --fd-disable
@@ -215,12 +214,6 @@ main() {
         run_cmd "${build_args[@]}"
 
         for driver in "${DRIVERS[@]}"; do
-            if [[ "$driver" == "rtlsim" && "$mode" == "NATIVE" && "$INCLUDE_RTLSIM_NATIVE" -ne 1 ]]; then
-                printf 'sha256\t%s\t%s\tskipped-no-rtl\t\n' "$mode" "$driver" >> "$RESULTS"
-                echo "== Skipping sha256 mode=$mode on rtlsim until SHA RTL is wired =="
-                continue
-            fi
-
             local log_file="$LOG_DIR/sha256-${mode}-${driver}.log"
             local status
             echo

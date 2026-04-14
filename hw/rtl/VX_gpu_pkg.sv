@@ -284,6 +284,10 @@ package VX_gpu_pkg;
     localparam INST_CRYPTO_AES64IM   = 4'b0000;
     localparam INST_CRYPTO_AES64KS1I = 4'b0001;
     localparam INST_CRYPTO_AES64KS2  = 4'b0010;
+    localparam INST_CRYPTO_SHA256SUM0 = 4'b0000;
+    localparam INST_CRYPTO_SHA256SUM1 = 4'b0001;
+    localparam INST_CRYPTO_SHA256SIG0 = 4'b0010;
+    localparam INST_CRYPTO_SHA256SIG1 = 4'b0011;
 
     localparam CRYPTO_CLASS_BITS = 2;
     localparam CRYPTO_CLASS_AES  = 2'd0;
