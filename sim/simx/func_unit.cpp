@@ -93,6 +93,19 @@ void AluUnit::tick() {
 				std::abort();
 			}
 			DT(3, this->name() << ": op=" << mdv_type << ", " << *trace);
+		} else if (std::get_if<ShaType>(&trace->op_type)) {
+			auto sha_type = std::get<ShaType>(trace->op_type);
+			switch (sha_type) {
+			case ShaType::SHA256SIG0:
+			case ShaType::SHA256SIG1:
+			case ShaType::SHA256SUM0:
+			case ShaType::SHA256SUM1:
+				delay = 2;
+				break;
+			default:
+				std::abort();
+			}
+			DT(3, this->name() << ": op=" << sha_type << ", " << *trace);
 		} else if (std::get_if<AesType>(&trace->op_type)) {
 			auto aes_type = std::get<AesType>(trace->op_type);
 			switch (aes_type) {

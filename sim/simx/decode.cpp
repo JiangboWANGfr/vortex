@@ -200,6 +200,16 @@ static op_string_t op_string(const Instr &instr) {
         std::abort();
       }
     },
+    [&](ShaType sha_type)-> op_string_t {
+      switch (sha_type) {
+      case ShaType::SHA256SIG0: return {"SHA256SIG0", ""};
+      case ShaType::SHA256SIG1: return {"SHA256SIG1", ""};
+      case ShaType::SHA256SUM0: return {"SHA256SUM0", ""};
+      case ShaType::SHA256SUM1: return {"SHA256SUM1", ""};
+      default:
+        std::abort();
+      }
+    },
     [&](FpuType fpu_type)-> op_string_t {
       auto fpuArgs = std::get<IntrFpuArgs>(instrArgs);
       switch (fpu_type) {
@@ -628,11 +638,50 @@ void Emulator::decode(uint32_t code, uint32_t wid, uint64_t uuid) {
       if ((imm12 & 0xff0) == 0x310) {
         instr->setOpType(AesType::KS1I64);
         instr->setArgs(IntrAesArgs{imm12 & 0x00f});
+      } else
+      if (imm12 == 0x100) {
+        instr->setOpType(ShaType::SHA256SUM0);
+        instr->setArgs(IntrShaArgs{});
+      } else
+      if (imm12 == 0x101) {
+        instr->setOpType(ShaType::SHA256SUM1);
+        instr->setArgs(IntrShaArgs{});
+      } else
+      if (imm12 == 0x102) {
+        instr->setOpType(ShaType::SHA256SIG0);
+        instr->setArgs(IntrShaArgs{});
+      } else
+      if (imm12 == 0x103) {
+        instr->setOpType(ShaType::SHA256SIG1);
+        instr->setArgs(IntrShaArgs{});
       } else {
         goto decode_integer_alu;
       }
     } else
 #endif
+    if (op == Opcode::I && funct3 == 0x1) {
+      auto imm12 = (code >> shift_rs2) & mask_i_imm;
+      switch (imm12) {
+      case 0x100:
+        instr->setOpType(ShaType::SHA256SUM0);
+        instr->setArgs(IntrShaArgs{});
+        break;
+      case 0x101:
+        instr->setOpType(ShaType::SHA256SUM1);
+        instr->setArgs(IntrShaArgs{});
+        break;
+      case 0x102:
+        instr->setOpType(ShaType::SHA256SIG0);
+        instr->setArgs(IntrShaArgs{});
+        break;
+      case 0x103:
+        instr->setOpType(ShaType::SHA256SIG1);
+        instr->setArgs(IntrShaArgs{});
+        break;
+      default:
+        goto decode_integer_alu;
+      }
+    } else
     if ((op == Opcode::R || op == Opcode::R_W) && (funct7 & 0x1)) {
       switch (funct3) {
       case 0: { // RV32M: MUL

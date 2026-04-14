@@ -221,6 +221,30 @@ inline void vx_fence() {
     __asm__ volatile ("fence iorw, iorw");
 }
 
+static inline uint32_t __intrin_sha256sig0(uint32_t rs1) {
+    uint32_t rd;
+    __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x102" : "=r"(rd) : "r"(rs1));
+    return rd;
+}
+
+static inline uint32_t __intrin_sha256sig1(uint32_t rs1) {
+    uint32_t rd;
+    __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x103" : "=r"(rd) : "r"(rs1));
+    return rd;
+}
+
+static inline uint32_t __intrin_sha256sum0(uint32_t rs1) {
+    uint32_t rd;
+    __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x100" : "=r"(rd) : "r"(rs1));
+    return rd;
+}
+
+static inline uint32_t __intrin_sha256sum1(uint32_t rs1) {
+    uint32_t rd;
+    __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x101" : "=r"(rd) : "r"(rs1));
+    return rd;
+}
+
 static inline uint32_t __intrin_aes32esi(uint32_t acc, uint32_t word, uint32_t byte_select) {
     switch (byte_select & 0x3) {
     case 0:

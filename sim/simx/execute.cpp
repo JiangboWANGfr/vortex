@@ -47,6 +47,27 @@ inline int64_t check_boxing(int64_t a) {
   return nan_box(0x7fc00000); // NaN
 }
 
+static inline uint32_t ror32(uint32_t value, uint32_t shamt) {
+  shamt &= 31;
+  return (value >> shamt) | (value << ((32 - shamt) & 31));
+}
+
+static inline uint32_t sha256sig0(uint32_t value) {
+  return ror32(value, 7) ^ ror32(value, 18) ^ (value >> 3);
+}
+
+static inline uint32_t sha256sig1(uint32_t value) {
+  return ror32(value, 17) ^ ror32(value, 19) ^ (value >> 10);
+}
+
+static inline uint32_t sha256sum0(uint32_t value) {
+  return ror32(value, 2) ^ ror32(value, 13) ^ ror32(value, 22);
+}
+
+static inline uint32_t sha256sum1(uint32_t value) {
+  return ror32(value, 6) ^ ror32(value, 11) ^ ror32(value, 25);
+}
+
 static inline uint8_t aes_xtime(uint8_t byte) {
   return ((byte << 1) & 0xff) ^ ((byte & 0x80) ? 0x1b : 0x00);
 }
@@ -852,6 +873,31 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
       } break;
       default:
         std::abort();
+      }
+      rd_write = true;
+    },
+    [&](ShaType sha_type) {
+      for (uint32_t t = thread_start; t < num_threads; ++t) {
+        if (!warp.tmask.test(t))
+          continue;
+        uint32_t result;
+        switch (sha_type) {
+        case ShaType::SHA256SIG0:
+          result = sha256sig0(rs1_data[t].u32);
+          break;
+        case ShaType::SHA256SIG1:
+          result = sha256sig1(rs1_data[t].u32);
+          break;
+        case ShaType::SHA256SUM0:
+          result = sha256sum0(rs1_data[t].u32);
+          break;
+        case ShaType::SHA256SUM1:
+          result = sha256sum1(rs1_data[t].u32);
+          break;
+        default:
+          std::abort();
+        }
+        rd_data[t].i = sext((uint64_t)result, 32);
       }
       rd_write = true;
     },

@@ -8,6 +8,7 @@ all:
 	$(MAKE) -C vecadd
 	$(MAKE) -C aes_smoke
 	$(MAKE) -C aes256
+	$(MAKE) -C sha256
 
 run-simx:
 	$(MAKE) -C conform run-simx
@@ -16,6 +17,7 @@ run-simx:
 	$(MAKE) -C vecadd run-simx
 	$(MAKE) -C aes_smoke run-simx
 	$(MAKE) -C aes256 run-simx
+	$(MAKE) -C sha256 run-simx
 
 run-rtlsim:
 	$(MAKE) -C conform run-rtlsim
@@ -24,6 +26,7 @@ run-rtlsim:
 	$(MAKE) -C vecadd run-rtlsim
 	$(MAKE) -C aes_smoke run-rtlsim
 	$(MAKE) -C aes256 run-rtlsim
+	$(MAKE) -C sha256 run-rtlsim SHA_ACCEL_MODE=SOFTWARE
 	
 clean:
 	$(MAKE) -C conform clean
@@ -32,3 +35,4 @@ clean:
 	$(MAKE) -C vecadd clean
 	$(MAKE) -C aes_smoke clean
 	$(MAKE) -C aes256 clean
+	$(MAKE) -C sha256 clean

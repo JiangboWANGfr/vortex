@@ -341,6 +341,30 @@ inline std::ostream &operator<<(std::ostream &os, const AesType& type) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+enum class ShaType {
+  SHA256SIG0,
+  SHA256SIG1,
+  SHA256SUM0,
+  SHA256SUM1
+};
+
+struct IntrShaArgs {
+};
+
+inline std::ostream &operator<<(std::ostream &os, const ShaType& type) {
+  switch (type) {
+  case ShaType::SHA256SIG0: os << "SHA256SIG0"; break;
+  case ShaType::SHA256SIG1: os << "SHA256SIG1"; break;
+  case ShaType::SHA256SUM0: os << "SHA256SUM0"; break;
+  case ShaType::SHA256SUM1: os << "SHA256SUM1"; break;
+  default:
+    assert(false);
+  }
+  return os;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 enum class LsuType {
   LOAD,
   STORE,
@@ -705,6 +729,7 @@ using OpType = std::variant<
 , BrType
 , MdvType
 , AesType
+, ShaType
 , LsuType
 , AmoType
 , FpuType
@@ -727,6 +752,7 @@ using IntrArgs = std::variant<
 , IntrBrArgs
 , IntrMdvArgs
 , IntrAesArgs
+, IntrShaArgs
 , IntrLsuArgs
 , IntrAmoArgs
 , IntrFpuArgs
