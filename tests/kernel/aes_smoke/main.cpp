@@ -50,6 +50,129 @@ static uint8_t xtime(uint8_t byte) {
   return ((byte << 1) & 0xff) ^ ((byte & 0x80) ? 0x1b : 0x00);
 }
 
+static uint32_t pack_bytes(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3) {
+  return uint32_t(b0) | (uint32_t(b1) << 8) | (uint32_t(b2) << 16) | (uint32_t(b3) << 24);
+}
+
+static uint64_t pack_cols(uint32_t c0, uint32_t c1) {
+  return uint64_t(c0) | (uint64_t(c1) << 32);
+}
+
+static uint8_t col_byte(uint32_t col, uint32_t idx) {
+  return (col >> (idx * 8)) & 0xff;
+}
+
+static uint32_t subbytes_fwd(uint32_t word) {
+  return pack_bytes(
+    sbox(col_byte(word, 0)),
+    sbox(col_byte(word, 1)),
+    sbox(col_byte(word, 2)),
+    sbox(col_byte(word, 3)));
+}
+
+static uint32_t subbytes_inv(uint32_t word) {
+  return pack_bytes(
+    inv_sbox(col_byte(word, 0)),
+    inv_sbox(col_byte(word, 1)),
+    inv_sbox(col_byte(word, 2)),
+    inv_sbox(col_byte(word, 3)));
+}
+
+static uint32_t mixcolumn_fwd(uint32_t word) {
+  uint8_t b0 = col_byte(word, 0);
+  uint8_t b1 = col_byte(word, 1);
+  uint8_t b2 = col_byte(word, 2);
+  uint8_t b3 = col_byte(word, 3);
+  return pack_bytes(
+    xtime(b0) ^ b1 ^ xtime(b1) ^ b2 ^ b3,
+    b0 ^ xtime(b1) ^ b2 ^ xtime(b2) ^ b3,
+    b0 ^ b1 ^ xtime(b2) ^ b3 ^ xtime(b3),
+    b0 ^ xtime(b0) ^ b1 ^ b2 ^ xtime(b3));
+}
+
+static uint32_t mixcolumn_inv(uint32_t word) {
+  uint8_t b0 = col_byte(word, 0);
+  uint8_t b1 = col_byte(word, 1);
+  uint8_t b2 = col_byte(word, 2);
+  uint8_t b3 = col_byte(word, 3);
+  uint8_t x0 = xtime(b0);
+  uint8_t x1 = xtime(b1);
+  uint8_t x2 = xtime(b2);
+  uint8_t x3 = xtime(b3);
+  uint8_t x20 = xtime(x0);
+  uint8_t x21 = xtime(x1);
+  uint8_t x22 = xtime(x2);
+  uint8_t x23 = xtime(x3);
+  uint8_t x30 = xtime(x20);
+  uint8_t x31 = xtime(x21);
+  uint8_t x32 = xtime(x22);
+  uint8_t x33 = xtime(x23);
+  return pack_bytes(
+    x0 ^ x20 ^ x30 ^ b1 ^ x1 ^ x31 ^ b2 ^ x22 ^ x32 ^ b3 ^ x33,
+    b0 ^ x30 ^ x1 ^ x21 ^ x31 ^ b2 ^ x2 ^ x32 ^ b3 ^ x23 ^ x33,
+    b0 ^ x20 ^ x30 ^ b1 ^ x31 ^ x2 ^ x22 ^ x32 ^ b3 ^ x3 ^ x33,
+    b0 ^ x0 ^ x30 ^ b1 ^ x21 ^ x31 ^ b2 ^ x32 ^ x3 ^ x23 ^ x33);
+}
+
+static uint32_t aes_rcon_ref(uint32_t round) {
+  static const uint32_t table[] = {
+    0x00000000, 0x00000001, 0x00000002, 0x00000004,
+    0x00000008, 0x00000010, 0x00000020, 0x00000040,
+    0x00000080, 0x0000001b, 0x00000036
+  };
+  return table[round];
+}
+
+static uint64_t aes64_shiftrows_fwd_ref(uint64_t rs1, uint64_t rs2) {
+  uint32_t a0 = uint32_t(rs1);
+  uint32_t a1 = uint32_t(rs1 >> 32);
+  uint32_t b0 = uint32_t(rs2);
+  uint32_t b1 = uint32_t(rs2 >> 32);
+  uint32_t o0 = pack_bytes(col_byte(a0, 0), col_byte(a1, 1), col_byte(b0, 2), col_byte(b1, 3));
+  uint32_t o1 = pack_bytes(col_byte(a1, 0), col_byte(b0, 1), col_byte(b1, 2), col_byte(a0, 3));
+  return pack_cols(o0, o1);
+}
+
+static uint64_t aes64_shiftrows_inv_ref(uint64_t rs1, uint64_t rs2) {
+  uint32_t a0 = uint32_t(rs1);
+  uint32_t a1 = uint32_t(rs1 >> 32);
+  uint32_t b0 = uint32_t(rs2);
+  uint32_t b1 = uint32_t(rs2 >> 32);
+  uint32_t o0 = pack_bytes(col_byte(a0, 0), col_byte(b1, 1), col_byte(b0, 2), col_byte(a1, 3));
+  uint32_t o1 = pack_bytes(col_byte(a1, 0), col_byte(a0, 1), col_byte(b1, 2), col_byte(b0, 3));
+  return pack_cols(o0, o1);
+}
+
+static int check_scalar_ops64() {
+#ifdef XLEN_64
+  int errors = 0;
+  const uint64_t rs1 = 0x8899aabb00112233ull;
+  const uint64_t rs2 = 0xccddeeff44556677ull;
+  auto check = [&](const char* name, uint64_t got, uint32_t ref_hi, uint32_t ref_lo) {
+    uint32_t got_hi = uint32_t(got >> 32);
+    uint32_t got_lo = uint32_t(got);
+    if (got_hi != ref_hi || got_lo != ref_lo) {
+      vx_printf("%s mismatch: got=%08x%08x ref=%08x%08x\n",
+                name,
+                got_hi, got_lo,
+                ref_hi, ref_lo);
+      ++errors;
+    }
+  };
+
+  check("AES64ES", __intrin_aes64es(rs1, rs2), 0x63c133ea, 0x4bfcacc3);
+  check("AES64ESM", __intrin_aes64esm(rs1, rs2), 0x11e5b738, 0x9851d4c5);
+  check("AES64DS", __intrin_aes64ds(rs1, rs2), 0x86c994fe, 0x97ed9966);
+  check("AES64DSM", __intrin_aes64dsm(rs1, rs2), 0x289d70e0, 0x97c28858);
+  check("AES64IM", __intrin_aes64im(rs1), 0x66334411, 0xeebbcc99);
+  check("AES64KS1I", __intrin_aes64ks1i(rs1, 0x4), 0xeac4eea4, 0xeac4eea4);
+  check("AES64KS2", __intrin_aes64ks2(rs1, rs2), 0x00112233, 0xcccccccc);
+  return errors;
+#else
+  return 0;
+#endif
+}
+
 static uint32_t aes32esi_ref(uint32_t acc, uint32_t word, uint32_t byte_select, int mix_columns) {
   uint8_t victim = (word >> (byte_select << 3)) & 0xff;
   uint8_t value = sbox(victim);
@@ -94,6 +217,9 @@ static uint32_t aes32dsi_ref(uint32_t acc, uint32_t word, uint32_t byte_select, 
 }
 
 static int check_scalar_ops() {
+#ifdef XLEN_64
+  return 0;
+#else
   int errors = 0;
   const uint32_t acc = 0x11223344;
   const uint32_t word = 0xa1b2c3d4;
@@ -129,6 +255,7 @@ static int check_scalar_ops() {
   }
 
   return errors;
+#endif
 }
 
 static int check_round_helpers() {
@@ -168,6 +295,7 @@ static int check_round_helpers() {
 int main() {
   int errors = 0;
   errors += check_scalar_ops();
+  errors += check_scalar_ops64();
   errors += check_round_helpers();
 
   if (errors == 0) {

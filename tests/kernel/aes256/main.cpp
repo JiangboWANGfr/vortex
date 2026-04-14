@@ -134,6 +134,10 @@ int run_cbc_enc_case() {
 } // namespace
 
 int main() {
+  if (vx_core_id() != 0) {
+    return 0;
+  }
+
   int errors = 0;
 
   errors += run_parallel_case("ECB ENC", AesMode::ECB_ENC, kPlaintext, kEcbCipher);

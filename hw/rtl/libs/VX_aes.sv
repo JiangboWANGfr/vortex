@@ -852,6 +852,18 @@ module VX_aes64 #(
         endcase
     endfunction
 
+    function automatic [7:0] get_byte32(
+        input [31:0] word,
+        input integer index
+    );
+        case (index)
+            0: get_byte32 = word[7:0];
+            1: get_byte32 = word[15:8];
+            2: get_byte32 = word[23:16];
+            default: get_byte32 = word[31:24];
+        endcase
+    endfunction
+
     wire [LANES-1:0][7:0][7:0] fwd_sbox_in;
     wire [LANES-1:0][7:0][7:0] inv_sbox_in;
     wire [LANES-1:0][7:0][7:0] fwd_sbox_out;
@@ -877,10 +889,19 @@ module VX_aes64 #(
         wire [31:0] shift_inv_hi = pack_bytes(rs1_hi[7:0], rs1_lo[15:8], rs2_hi[23:16], rs2_lo[31:24]);
         wire [31:0] ks1_word = (round_imm == 4'ha) ? rs1_hi : {rs1_hi[7:0], rs1_hi[31:8]};
 
-        for (genvar j = 0; j < 8; ++j) begin : g_sbox
-            wire [7:0] shift_fwd_byte = (j < 4) ? shift_fwd_lo[(8 * j) +: 8] : shift_fwd_hi[(8 * (j - 4)) +: 8];
-            wire [7:0] shift_inv_byte = (j < 4) ? shift_inv_lo[(8 * j) +: 8] : shift_inv_hi[(8 * (j - 4)) +: 8];
-            assign fwd_sbox_in[i][j] = op_aes64ks1i ? ((j < 4) ? ks1_word[(8 * j) +: 8] : 8'h00) : shift_fwd_byte;
+        for (genvar j = 0; j < 4; ++j) begin : g_sbox_lo
+            wire [7:0] shift_fwd_byte = get_byte32(shift_fwd_lo, j);
+            wire [7:0] shift_inv_byte = get_byte32(shift_inv_lo, j);
+            assign fwd_sbox_in[i][j] = op_aes64ks1i ? get_byte32(ks1_word, j) : shift_fwd_byte;
+            assign inv_sbox_in[i][j] = shift_inv_byte;
+            riscv_crypto_sbox_aes_lut  fwd_sbox (.out(fwd_sbox_out[i][j]), .in(fwd_sbox_in[i][j]));
+            riscv_crypto_sbox_aesi_lut inv_sbox (.out(inv_sbox_out[i][j]), .in(inv_sbox_in[i][j]));
+        end
+
+        for (genvar j = 4; j < 8; ++j) begin : g_sbox_hi
+            wire [7:0] shift_fwd_byte = get_byte32(shift_fwd_hi, j - 4);
+            wire [7:0] shift_inv_byte = get_byte32(shift_inv_hi, j - 4);
+            assign fwd_sbox_in[i][j] = op_aes64ks1i ? 8'h00 : shift_fwd_byte;
             assign inv_sbox_in[i][j] = shift_inv_byte;
             riscv_crypto_sbox_aes_lut  fwd_sbox (.out(fwd_sbox_out[i][j]), .in(fwd_sbox_in[i][j]));
             riscv_crypto_sbox_aesi_lut inv_sbox (.out(inv_sbox_out[i][j]), .in(inv_sbox_in[i][j]));
