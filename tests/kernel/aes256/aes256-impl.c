@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <vx_intrinsics.h>
+#include <vx_print.h>
 #include "aes256.h"
 #include "tables.h"
 
@@ -118,6 +119,41 @@ static void increment_128bit(uint32_t *limbs, uint32_t n) {
 
 // Modified key schedule generation from Section 5.3.5 of the AES spec
 void aes256_key_exp(const uint32_t *key, uint32_t *round_keys, int inv_mix_cols) {
+#if defined(AES_NATIVE) && defined(XLEN_64)
+    const int nwords = Nb * (Nr + 1);
+
+    for (int i = 0; i < Nk; i++) {
+        round_keys[i] = key[i];
+    }
+
+    for (int i = Nk; i < nwords; i += Nk) {
+        uint64_t prev01 = __intrin_pack_cols(round_keys[i - Nk + 0], round_keys[i - Nk + 1]);
+        uint64_t prev23 = __intrin_pack_cols(round_keys[i - Nk + 2], round_keys[i - Nk + 3]);
+        uint64_t prev67 = __intrin_pack_cols(round_keys[i - Nk + 6], round_keys[i - Nk + 7]);
+        uint64_t ks = __intrin_aes64ks1i(prev67, (uint32_t)(i / Nk));
+        uint64_t next01 = __intrin_aes64ks2(ks, prev01);
+        uint64_t next23 = __intrin_aes64ks2(next01, prev23);
+
+        __intrin_unpack_cols(next01, &round_keys[i + 0], &round_keys[i + 1]);
+        __intrin_unpack_cols(next23, &round_keys[i + 2], &round_keys[i + 3]);
+        if (vx_hart_id() == 0) {
+          vx_printf("AES256_BENCH: generated round keys %d-%d\n", i, i + 3);
+        }
+        if (i + 4 >= nwords) {
+            break;
+        }
+
+        uint64_t prev45 = __intrin_pack_cols(round_keys[i - Nk + 4], round_keys[i - Nk + 5]);
+        // Vortex AES64KS1I still applies aes_rcon(0xA); AES-256 needs SubWord only here.
+        uint64_t subword = __intrin_aes64ks1i(next23, 0xA) ^ __intrin_pack_cols(0x36, 0x36);
+        uint64_t next45 = __intrin_aes64ks2(subword, prev45);
+        uint64_t next67 = __intrin_aes64ks2(next45, prev67);
+
+        __intrin_unpack_cols(next45, &round_keys[i + 4], &round_keys[i + 5]);
+        __intrin_unpack_cols(next67, &round_keys[i + 6], &round_keys[i + 7]);
+        
+    }
+#else
     static const uint32_t rcon[] = {
         0x00000000,
         0x00000001,
@@ -144,6 +180,7 @@ void aes256_key_exp(const uint32_t *key, uint32_t *round_keys, int inv_mix_cols)
         }
         round_keys[i] = round_keys[i - Nk] ^ temp;
     }
+#endif
 
     // For equivalent inverse cipher. See Section 5.3.5 of AES spec
     if (inv_mix_cols) {
