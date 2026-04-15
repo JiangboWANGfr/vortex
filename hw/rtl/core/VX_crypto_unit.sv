@@ -30,7 +30,7 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
     localparam BLOCK_SIZE   = `NUM_ALU_BLOCKS;
     localparam NUM_LANES    = `NUM_ALU_LANES;
     localparam PARTIAL_BW   = (BLOCK_SIZE != `ISSUE_WIDTH) || (NUM_LANES != `SIMD_WIDTH);
-    localparam PE_COUNT     = 2;
+    localparam PE_COUNT     = 1 + `EXT_SHA256_ENABLED;
     localparam PE_SEL_BITS  = `CLOG2(PE_COUNT);
     localparam PE_IDX_AES   = 0;
     localparam PE_IDX_SHA   = 1;
@@ -66,11 +66,10 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
         reg [`UP(PE_SEL_BITS)-1:0] pe_select;
         always @(*) begin
             pe_select = PE_IDX_AES;
-            case (per_block_execute_if[block_idx].data.op_args.crypto.unit)
-                CRYPTO_CLASS_AES: pe_select = PE_IDX_AES;
-                CRYPTO_CLASS_SHA: pe_select = PE_IDX_SHA;
-                default:          pe_select = PE_IDX_AES;
-            endcase
+        `ifdef EXT_SHA256_ENABLE
+            if (per_block_execute_if[block_idx].data.op_args.crypto.unit == CRYPTO_CLASS_SHA)
+                pe_select = PE_IDX_SHA;
+        `endif
         end
 
         VX_pe_switch #(
@@ -99,6 +98,7 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
             .result_if  (pe_result_if[PE_IDX_AES])
         );
 
+    `ifdef EXT_SHA256_ENABLE
         VX_crypto_sha #(
             .INSTANCE_ID (`SFORMATF(("%s-sha%0d", INSTANCE_ID, block_idx))),
             .NUM_LANES   (NUM_LANES)
@@ -108,6 +108,7 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
             .execute_if (pe_execute_if[PE_IDX_SHA]),
             .result_if  (pe_result_if[PE_IDX_SHA])
         );
+    `endif
     end
 
     VX_gather_unit #(

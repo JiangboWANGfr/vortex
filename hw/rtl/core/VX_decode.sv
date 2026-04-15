@@ -166,6 +166,7 @@ module VX_decode import VX_gpu_pkg::*; #(
                 op_args.alu.imm = `SEXT(`XLEN, i_imm);
                 `USED_IREG (rd);
                 `USED_IREG (rs1);
+            `ifdef EXT_SHA256_ENABLE
                 if (funct3 == 3'h1 && u_12[11:2] == 10'h040) begin
                     ex_type = EX_CRYPTO;
                     op_args.crypto.unit = CRYPTO_CLASS_SHA;
@@ -178,8 +179,12 @@ module VX_decode import VX_gpu_pkg::*; #(
                         2'b11: op_type = INST_OP_BITS'(INST_CRYPTO_SHA256SIG1);
                     endcase
                 end
+            `endif
             `ifdef XLEN_64
-                else if (funct3 == 3'h1) begin
+                `ifdef EXT_SHA256_ENABLE
+                else
+                `endif
+                if (funct3 == 3'h1) begin
                     if (u_12 == 12'h300) begin
                         ex_type = EX_CRYPTO;
                         op_args.crypto.unit = CRYPTO_CLASS_AES;
