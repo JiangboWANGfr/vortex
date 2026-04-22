@@ -106,6 +106,21 @@ void AluUnit::tick() {
 				std::abort();
 			}
 			DT(3, this->name() << ": op=" << sha_type << ", " << *trace);
+		} else if (std::get_if<KeccakType>(&trace->op_type)) {
+			auto keccak_type = std::get<KeccakType>(trace->op_type);
+			switch (keccak_type) {
+			case KeccakType::WR:
+			case KeccakType::XOR:
+			case KeccakType::RD:
+				delay = 2;
+				break;
+			case KeccakType::F1600:
+				delay = 26;
+				break;
+			default:
+				std::abort();
+			}
+			DT(3, this->name() << ": op=" << keccak_type << ", " << *trace);
 		} else if (std::get_if<AesType>(&trace->op_type)) {
 			auto aes_type = std::get<AesType>(trace->op_type);
 			switch (aes_type) {

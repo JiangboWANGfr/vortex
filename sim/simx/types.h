@@ -365,6 +365,30 @@ inline std::ostream &operator<<(std::ostream &os, const ShaType& type) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+enum class KeccakType {
+  WR,
+  XOR,
+  RD,
+  F1600
+};
+
+struct IntrKeccakArgs {
+};
+
+inline std::ostream &operator<<(std::ostream &os, const KeccakType& type) {
+  switch (type) {
+  case KeccakType::WR:    os << "KECCAK_WR"; break;
+  case KeccakType::XOR:   os << "KECCAK_XOR"; break;
+  case KeccakType::RD:    os << "KECCAK_RD"; break;
+  case KeccakType::F1600: os << "KECCAK_F1600"; break;
+  default:
+    assert(false);
+  }
+  return os;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 enum class LsuType {
   LOAD,
   STORE,
@@ -730,6 +754,7 @@ using OpType = std::variant<
 , MdvType
 , AesType
 , ShaType
+, KeccakType
 , LsuType
 , AmoType
 , FpuType
@@ -753,6 +778,7 @@ using IntrArgs = std::variant<
 , IntrMdvArgs
 , IntrAesArgs
 , IntrShaArgs
+, IntrKeccakArgs
 , IntrLsuArgs
 , IntrAmoArgs
 , IntrFpuArgs

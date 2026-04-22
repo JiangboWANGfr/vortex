@@ -49,7 +49,7 @@ enum class Opcode : uint8_t {
   EXT2      = 0b0101011,
   EXT3      = 0b1011011,
   EXT4      = 0b1111011
-};;
+};
 
 enum class InstType {
   R,

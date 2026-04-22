@@ -68,6 +68,138 @@ static inline uint32_t sha256sum1(uint32_t value) {
   return ror32(value, 6) ^ ror32(value, 11) ^ ror32(value, 25);
 }
 
+static inline uint64_t rotl64(uint64_t value, uint32_t shamt) {
+  shamt &= 63;
+  return (value << shamt) | (value >> ((64 - shamt) & 63));
+}
+
+static inline void keccak_f1600(std::array<uint64_t, 25>& state) {
+  static const uint64_t round_constants[24] = {
+    0x0000000000000001ull, 0x0000000000008082ull,
+    0x800000000000808aull, 0x8000000080008000ull,
+    0x000000000000808bull, 0x0000000080000001ull,
+    0x8000000080008081ull, 0x8000000000008009ull,
+    0x000000000000008aull, 0x0000000000000088ull,
+    0x0000000080008009ull, 0x000000008000000aull,
+    0x000000008000808bull, 0x800000000000008bull,
+    0x8000000000008089ull, 0x8000000000008003ull,
+    0x8000000000008002ull, 0x8000000000000080ull,
+    0x000000000000800aull, 0x800000008000000aull,
+    0x8000000080008081ull, 0x8000000000008080ull,
+    0x0000000080000001ull, 0x8000000080008008ull,
+  };
+
+  for (uint32_t round = 0; round < 24; ++round) {
+    uint64_t c0 = state[0] ^ state[5] ^ state[10] ^ state[15] ^ state[20];
+    uint64_t c1 = state[1] ^ state[6] ^ state[11] ^ state[16] ^ state[21];
+    uint64_t c3 = state[4] ^ state[9] ^ state[14] ^ state[19] ^ state[24];
+
+    uint64_t c2 = rotl64(c1, 1) ^ c3;
+    state[0] ^= c2;
+    state[5] ^= c2;
+    state[10] ^= c2;
+    state[15] ^= c2;
+    state[20] ^= c2;
+
+    c2 = state[2] ^ state[7] ^ state[12] ^ state[17] ^ state[22];
+
+    c3 = rotl64(c3, 1) ^ c2;
+    c2 = rotl64(c2, 1) ^ c0;
+
+    state[1] ^= c2;
+    state[6] ^= c2;
+    state[11] ^= c2;
+    state[16] ^= c2;
+    state[21] ^= c2;
+
+    c2 = state[3] ^ state[8] ^ state[13] ^ state[18] ^ state[23];
+
+    c0 = rotl64(c0, 1) ^ c2;
+    c2 = rotl64(c2, 1) ^ c1;
+
+    state[4] ^= c0;
+    state[9] ^= c0;
+    state[14] ^= c0;
+    state[19] ^= c0;
+    state[24] ^= c0;
+
+    state[3] ^= c3;
+    state[8] ^= c3;
+    state[13] ^= c3;
+    state[18] ^= c3;
+    state[23] ^= c3;
+
+    state[2] ^= c2;
+    state[7] ^= c2;
+    state[12] ^= c2;
+    state[17] ^= c2;
+    state[22] ^= c2;
+
+    c1 = state[5];
+    state[5] = rotl64(state[3], 28);
+    state[3] = rotl64(state[18], 21);
+    state[18] = rotl64(state[17], 15);
+    state[17] = rotl64(state[11], 10);
+    state[11] = rotl64(state[7], 6);
+    state[7] = rotl64(state[10], 3);
+    state[10] = rotl64(state[1], 1);
+    state[1] = rotl64(state[6], 44);
+    state[6] = rotl64(state[9], 20);
+    state[9] = rotl64(state[22], 61);
+    state[22] = rotl64(state[14], 39);
+    state[14] = rotl64(state[20], 18);
+    state[20] = rotl64(state[2], 62);
+    state[2] = rotl64(state[12], 43);
+    state[12] = rotl64(state[13], 25);
+    state[13] = rotl64(state[19], 8);
+    state[19] = rotl64(state[23], 56);
+    state[23] = rotl64(state[15], 41);
+    state[15] = rotl64(state[4], 27);
+    state[4] = rotl64(state[24], 14);
+    state[24] = rotl64(state[21], 2);
+    state[21] = rotl64(state[8], 55);
+    state[8] = rotl64(state[16], 45);
+    state[16] = rotl64(c1, 36);
+
+    c0 = (~state[3]) & state[4];
+    state[4] ^= (~state[0]) & state[1];
+    state[1] ^= (~state[2]) & state[3];
+    state[3] ^= (~state[4]) & state[0];
+    state[0] ^= (~state[1]) & state[2];
+    state[2] ^= c0;
+
+    c0 = (~state[8]) & state[9];
+    state[9] ^= (~state[5]) & state[6];
+    state[6] ^= (~state[7]) & state[8];
+    state[8] ^= (~state[9]) & state[5];
+    state[5] ^= (~state[6]) & state[7];
+    state[7] ^= c0;
+
+    c0 = (~state[13]) & state[14];
+    state[14] ^= (~state[10]) & state[11];
+    state[11] ^= (~state[12]) & state[13];
+    state[13] ^= (~state[14]) & state[10];
+    state[10] ^= (~state[11]) & state[12];
+    state[12] ^= c0;
+
+    c0 = (~state[18]) & state[19];
+    state[19] ^= (~state[15]) & state[16];
+    state[16] ^= (~state[17]) & state[18];
+    state[18] ^= (~state[19]) & state[15];
+    state[15] ^= (~state[16]) & state[17];
+    state[17] ^= c0;
+
+    c0 = (~state[23]) & state[24];
+    state[24] ^= (~state[20]) & state[21];
+    state[21] ^= (~state[22]) & state[23];
+    state[23] ^= (~state[24]) & state[20];
+    state[20] ^= (~state[21]) & state[22];
+    state[22] ^= c0;
+
+    state[0] ^= round_constants[round];
+  }
+}
+
 static inline uint8_t aes_xtime(uint8_t byte) {
   return ((byte << 1) & 0xff) ^ ((byte & 0x80) ? 0x1b : 0x00);
 }
@@ -900,6 +1032,37 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
         rd_data[t].i = sext((uint64_t)result, 32);
       }
       rd_write = true;
+    },
+    [&](KeccakType keccak_type) {
+      auto& keccak_state = keccak_state_.at(wid);
+      switch (keccak_type) {
+      case KeccakType::WR: {
+        auto lane_idx = rs2_data[0].u32 & 0x1f;
+        keccak_state.at(lane_idx) = rs1_data[0].u64;
+        rd_write = false;
+      } break;
+      case KeccakType::XOR: {
+        auto lane_idx = rs2_data[0].u32 & 0x1f;
+        keccak_state.at(lane_idx) ^= rs1_data[0].u64;
+        rd_write = false;
+      } break;
+      case KeccakType::RD: {
+        auto lane_idx = rs1_data[0].u32 & 0x1f;
+        auto value = keccak_state.at(lane_idx);
+        for (uint32_t t = thread_start; t < num_threads; ++t) {
+          if (!warp.tmask.test(t))
+            continue;
+          rd_data[t].u64 = value;
+        }
+        rd_write = true;
+      } break;
+      case KeccakType::F1600:
+        keccak_f1600(keccak_state);
+        rd_write = false;
+        break;
+      default:
+        std::abort();
+      }
     },
     [&](AesType aes_type) {
       auto aesArgs = std::get<IntrAesArgs>(instrArgs);

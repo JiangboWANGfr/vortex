@@ -14,6 +14,7 @@
 #ifndef __WARP_H
 #define __WARP_H
 
+#include <array>
 #include <vector>
 #include <sstream>
 #include <stack>
@@ -149,6 +150,7 @@ private:
   WarpMask    active_warps_;
   WarpMask    stalled_warps_;
   std::vector<WarpMask> barriers_;
+  std::vector<std::array<uint64_t, 25>> keccak_state_;
   std::unordered_map<int, std::stringstream> print_bufs_;
   MemoryUnit  mmu_;
   uint32_t    ipdom_size_;

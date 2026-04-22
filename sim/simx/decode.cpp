@@ -210,6 +210,16 @@ static op_string_t op_string(const Instr &instr) {
         std::abort();
       }
     },
+    [&](KeccakType keccak_type)-> op_string_t {
+      switch (keccak_type) {
+      case KeccakType::WR:    return {"KECCAK_WR", ""};
+      case KeccakType::XOR:   return {"KECCAK_XOR", ""};
+      case KeccakType::RD:    return {"KECCAK_RD", ""};
+      case KeccakType::F1600: return {"KECCAK_F1600", ""};
+      default:
+        std::abort();
+      }
+    },
     [&](FpuType fpu_type)-> op_string_t {
       auto fpuArgs = std::get<IntrFpuArgs>(instrArgs);
       switch (fpu_type) {
@@ -1201,6 +1211,33 @@ decode_integer_alu:
       case 7:
         instr->setOpType(ShflType::IDX);
         instr->setSrcReg(1, rs2, RegType::Integer);
+        break;
+      default:
+        std::abort();
+      }
+      ibuffer.push_back(instr);
+    } break;
+    case 3: {
+      auto instr = std::allocate_shared<Instr>(instr_pool_, uuid, FUType::ALU);
+      instr->setArgs(IntrKeccakArgs{});
+      switch (funct3) {
+      case 0:
+        instr->setOpType(KeccakType::WR);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        instr->setSrcReg(1, rs2, RegType::Integer);
+        break;
+      case 1:
+        instr->setOpType(KeccakType::XOR);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        instr->setSrcReg(1, rs2, RegType::Integer);
+        break;
+      case 2:
+        instr->setOpType(KeccakType::RD);
+        instr->setDestReg(rd, RegType::Integer);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        break;
+      case 3:
+        instr->setOpType(KeccakType::F1600);
         break;
       default:
         std::abort();
