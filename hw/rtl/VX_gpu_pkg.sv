@@ -288,6 +288,10 @@ package VX_gpu_pkg;
     localparam INST_CRYPTO_SHA256SUM1 = 4'b0001;
     localparam INST_CRYPTO_SHA256SIG0 = 4'b0010;
     localparam INST_CRYPTO_SHA256SIG1 = 4'b0011;
+    localparam INST_CRYPTO_KECCAK_WR  = 4'b0100;
+    localparam INST_CRYPTO_KECCAK_XOR = 4'b0101;
+    localparam INST_CRYPTO_KECCAK_RD  = 4'b0110;
+    localparam INST_CRYPTO_KECCAK_F1600 = 4'b0111;
 
     localparam CRYPTO_CLASS_BITS = 2;
     localparam CRYPTO_CLASS_AES  = 2'd0;

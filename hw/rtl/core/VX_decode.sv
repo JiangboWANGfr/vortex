@@ -579,6 +579,39 @@ module VX_decode import VX_gpu_pkg::*; #(
                         end
                         op_type = INST_OP_BITS'(funct3);
                     end
+                `ifdef EXT_KECCAK_ENABLE
+                    7'h03: begin // Keccak custom extension
+                        ex_type = EX_CRYPTO;
+                        op_args.crypto.unit = CRYPTO_CLASS_MISC;
+                        op_args.crypto.byte_select = '0;
+                        op_args.crypto.round_imm = '0;
+                        case (funct3)
+                            3'h0: begin // KWR
+                                op_type = INST_OP_BITS'(INST_CRYPTO_KECCAK_WR);
+                                `USED_IREG (rs1);
+                                `USED_IREG (rs2);
+                            end
+                            3'h1: begin // KXOR
+                                op_type = INST_OP_BITS'(INST_CRYPTO_KECCAK_XOR);
+                                `USED_IREG (rs1);
+                                `USED_IREG (rs2);
+                            end
+                            3'h2: begin // KRD
+                                op_type = INST_OP_BITS'(INST_CRYPTO_KECCAK_RD);
+                                `USED_IREG (rd);
+                                `USED_IREG (rs1);
+                            end
+                            3'h3: begin // KPERM
+                                op_type = INST_OP_BITS'(INST_CRYPTO_KECCAK_F1600);
+                            end
+                            default: begin
+                                ex_type = 'x;
+                                op_type = 'x;
+                                op_args = 'x;
+                            end
+                        endcase
+                    end
+                `endif
                 `ifdef EXT_TCU_ENABLE
                     7'h02: begin
                         case (funct3)

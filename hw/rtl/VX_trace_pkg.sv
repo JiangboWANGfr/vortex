@@ -174,19 +174,42 @@ package VX_trace_pkg;
             endcase
         end
         EX_CRYPTO: begin
-            case (INST_ALU_BITS'(op_type))
-                INST_CRYPTO_AES32ESI:  `TRACE(level, ("AES32ESI"))
-                INST_CRYPTO_AES32ESMI: `TRACE(level, ("AES32ESMI"))
-                INST_CRYPTO_AES32DSI:  `TRACE(level, ("AES32DSI"))
-                INST_CRYPTO_AES32DSMI: `TRACE(level, ("AES32DSMI"))
-                INST_CRYPTO_AES64ES:   `TRACE(level, ("AES64ES"))
-                INST_CRYPTO_AES64ESM:  `TRACE(level, ("AES64ESM"))
-                INST_CRYPTO_AES64DS:   `TRACE(level, ("AES64DS"))
-                INST_CRYPTO_AES64DSM:  `TRACE(level, ("AES64DSM"))
-                INST_CRYPTO_AES64IM:   `TRACE(level, ("AES64IM"))
-                INST_CRYPTO_AES64KS1I: `TRACE(level, ("AES64KS1I"))
-                INST_CRYPTO_AES64KS2:  `TRACE(level, ("AES64KS2"))
-                default:               `TRACE(level, ("?"))
+            case (op_args.crypto.unit)
+                CRYPTO_CLASS_AES: begin
+                    case (INST_ALU_BITS'(op_type))
+                        INST_CRYPTO_AES32ESI:  `TRACE(level, ("AES32ESI"))
+                        INST_CRYPTO_AES32ESMI: `TRACE(level, ("AES32ESMI"))
+                        INST_CRYPTO_AES32DSI:  `TRACE(level, ("AES32DSI"))
+                        INST_CRYPTO_AES32DSMI: `TRACE(level, ("AES32DSMI"))
+                        INST_CRYPTO_AES64ES:   `TRACE(level, ("AES64ES"))
+                        INST_CRYPTO_AES64ESM:  `TRACE(level, ("AES64ESM"))
+                        INST_CRYPTO_AES64DS:   `TRACE(level, ("AES64DS"))
+                        INST_CRYPTO_AES64DSM:  `TRACE(level, ("AES64DSM"))
+                        INST_CRYPTO_AES64IM:   `TRACE(level, ("AES64IM"))
+                        INST_CRYPTO_AES64KS1I: `TRACE(level, ("AES64KS1I"))
+                        INST_CRYPTO_AES64KS2:  `TRACE(level, ("AES64KS2"))
+                        default:               `TRACE(level, ("?"))
+                    endcase
+                end
+                CRYPTO_CLASS_SHA: begin
+                    case (INST_ALU_BITS'(op_type))
+                        INST_CRYPTO_SHA256SUM0: `TRACE(level, ("SHA256SUM0"))
+                        INST_CRYPTO_SHA256SUM1: `TRACE(level, ("SHA256SUM1"))
+                        INST_CRYPTO_SHA256SIG0: `TRACE(level, ("SHA256SIG0"))
+                        INST_CRYPTO_SHA256SIG1: `TRACE(level, ("SHA256SIG1"))
+                        default:                `TRACE(level, ("?"))
+                    endcase
+                end
+                CRYPTO_CLASS_MISC: begin
+                    case (INST_ALU_BITS'(op_type))
+                        INST_CRYPTO_KECCAK_WR:    `TRACE(level, ("KECCAK.WR"))
+                        INST_CRYPTO_KECCAK_XOR:   `TRACE(level, ("KECCAK.XOR"))
+                        INST_CRYPTO_KECCAK_RD:    `TRACE(level, ("KECCAK.RD"))
+                        INST_CRYPTO_KECCAK_F1600: `TRACE(level, ("KECCAK.F1600"))
+                        default:                  `TRACE(level, ("?"))
+                    endcase
+                end
+                default: `TRACE(level, ("?"))
             endcase
         end
         EX_LSU: begin

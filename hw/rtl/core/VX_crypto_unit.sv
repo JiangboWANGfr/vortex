@@ -27,13 +27,24 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
 );
 
     `UNUSED_SPARAM (INSTANCE_ID)
-    localparam BLOCK_SIZE   = `NUM_ALU_BLOCKS;
+    // Keep crypto execution serialized through a single block so stateful units
+    // such as Keccak see a coherent per-warp context across instructions.
+    localparam BLOCK_SIZE   = 1;
     localparam NUM_LANES    = `NUM_ALU_LANES;
     localparam PARTIAL_BW   = (BLOCK_SIZE != `ISSUE_WIDTH) || (NUM_LANES != `SIMD_WIDTH);
-    localparam PE_COUNT     = 1 + `EXT_SHA256_ENABLED;
+    localparam PE_COUNT     = 1 + `EXT_SHA256_ENABLED + `EXT_KECCAK_ENABLED;
     localparam PE_SEL_BITS  = `CLOG2(PE_COUNT);
     localparam PE_IDX_AES   = 0;
-    localparam PE_IDX_SHA   = 1;
+`ifdef EXT_SHA256_ENABLE
+    localparam PE_IDX_SHA   = PE_IDX_AES + 1;
+`endif
+`ifdef EXT_KECCAK_ENABLE
+`ifdef EXT_SHA256_ENABLE
+    localparam PE_IDX_KECCAK = PE_IDX_SHA + 1;
+`else
+    localparam PE_IDX_KECCAK = PE_IDX_AES + 1;
+`endif
+`endif
 
     VX_execute_if #(
         .data_t (alu_exe_t)
@@ -69,6 +80,10 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
         `ifdef EXT_SHA256_ENABLE
             if (per_block_execute_if[block_idx].data.op_args.crypto.unit == CRYPTO_CLASS_SHA)
                 pe_select = PE_IDX_SHA;
+        `endif
+        `ifdef EXT_KECCAK_ENABLE
+            if (per_block_execute_if[block_idx].data.op_args.crypto.unit == CRYPTO_CLASS_MISC)
+                pe_select = PE_IDX_KECCAK;
         `endif
         end
 
@@ -107,6 +122,18 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
             .reset      (reset),
             .execute_if (pe_execute_if[PE_IDX_SHA]),
             .result_if  (pe_result_if[PE_IDX_SHA])
+        );
+    `endif
+
+    `ifdef EXT_KECCAK_ENABLE
+        VX_crypto_keccak #(
+            .INSTANCE_ID (`SFORMATF(("%s-keccak%0d", INSTANCE_ID, block_idx))),
+            .NUM_LANES   (NUM_LANES)
+        ) keccak_unit (
+            .clk        (clk),
+            .reset      (reset),
+            .execute_if (pe_execute_if[PE_IDX_KECCAK]),
+            .result_if  (pe_result_if[PE_IDX_KECCAK])
         );
     `endif
     end

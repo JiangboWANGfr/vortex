@@ -221,6 +221,26 @@ inline void vx_fence() {
     __asm__ volatile ("fence iorw, iorw");
 }
 
+#ifdef XLEN_64
+static inline void __intrin_keccak_write_lane(uint64_t value, uint32_t lane_idx) {
+    __asm__ volatile (".insn r 0x0b, 0, 0x03, x0, %0, %1" :: "r"(value), "r"(lane_idx));
+}
+
+static inline void __intrin_keccak_xor_lane(uint64_t value, uint32_t lane_idx) {
+    __asm__ volatile (".insn r 0x0b, 1, 0x03, x0, %0, %1" :: "r"(value), "r"(lane_idx));
+}
+
+static inline uint64_t __intrin_keccak_read_lane(uint32_t lane_idx) {
+    uint64_t rd;
+    __asm__ volatile (".insn r 0x0b, 2, 0x03, %0, %1, x0" : "=r"(rd) : "r"(lane_idx));
+    return rd;
+}
+
+static inline void __intrin_keccak_f1600(void) {
+    __asm__ volatile (".insn r 0x0b, 3, 0x03, x0, x0, x0");
+}
+#endif
+
 static inline uint32_t __intrin_sha256sig0(uint32_t rs1) {
     uint32_t rd;
     __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x102" : "=r"(rd) : "r"(rs1));

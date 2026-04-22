@@ -902,6 +902,12 @@
     `define EXT_SHA256_ENABLED 0
 `endif
 
+`ifdef EXT_KECCAK_ENABLE
+    `define EXT_KECCAK_ENABLED 1
+`else
+    `define EXT_KECCAK_ENABLED 0
+`endif
+
 `ifdef EXT_TCU_ENABLE
     `define EXT_TCU_ENABLED 1
 `else
