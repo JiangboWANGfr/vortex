@@ -56,6 +56,33 @@ static int run_case(const char *name,
     return 0;
 }
 
+#ifdef KECCAK_NATIVE
+static int run_native_lane_sanity(void) {
+    enum { kKeccakStateLanes = 25 };
+    const uint64_t seed = 0x0123456789abcdefULL;
+    const uint64_t delta = 0xfedcba9876543210ULL;
+    const uint32_t lane = 7;
+
+    __intrin_keccak_write_lane(seed, lane);
+    if (__intrin_keccak_read_lane(lane) != seed) {
+        vx_printf("Keccak lane write/read mismatch\n");
+        return 1;
+    }
+
+    __intrin_keccak_xor_lane(delta, lane);
+    if (__intrin_keccak_read_lane(lane) != (seed ^ delta)) {
+        vx_printf("Keccak lane xor/read mismatch\n");
+        return 1;
+    }
+
+    for (uint32_t i = 0; i < kKeccakStateLanes; ++i) {
+        __intrin_keccak_write_lane(0, i);
+    }
+
+    return 0;
+}
+#endif
+
 int main(void) {
     if (vx_core_id() != 0 || vx_warp_id() != 0 || vx_thread_id() != 0) {
         return 0;
@@ -63,6 +90,9 @@ int main(void) {
 
     int errors = 0;
 
+#ifdef KECCAK_NATIVE
+    errors += run_native_lane_sanity();
+#endif
     errors += run_case("empty", "", 0, k_digest_empty);
     errors += run_case("abc", "abc", 3, k_digest_abc);
     errors += run_case("abcdbc",
@@ -75,6 +105,10 @@ int main(void) {
         return errors;
     }
 
+    #ifdef KECCAK_NATIVE
+    vx_printf("Keccak/SHA3-256 Passed! mode=NATIVE\n");
+    #else
     vx_printf("Keccak/SHA3-256 Passed! mode=SOFTWARE\n");
+    #endif
     return 0;
 }

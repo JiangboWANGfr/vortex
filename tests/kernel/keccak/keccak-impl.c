@@ -1,5 +1,9 @@
 #include "keccak.h"
 
+#ifdef KECCAK_NATIVE
+#include <vx_intrinsics.h>
+#endif
+
 #define KECCAK_STATE_LANES 25
 #define KECCAK_ROUNDS 24
 
@@ -38,6 +42,19 @@ static void copy_bytes(uint8_t *dst, const uint8_t *src, uint32_t n) {
     }
 }
 
+#ifdef KECCAK_NATIVE
+static void keccak_f1600_permute(uint64_t *s) {
+    for (uint32_t i = 0; i < KECCAK_STATE_LANES; ++i) {
+        __intrin_keccak_write_lane(s[i], i);
+    }
+
+    __intrin_keccak_f1600();
+
+    for (uint32_t i = 0; i < KECCAK_STATE_LANES; ++i) {
+        s[i] = __intrin_keccak_read_lane(i);
+    }
+}
+#else
 static void keccak_f1600_permute(uint64_t *s) {
     for (uint32_t round = 0; round < KECCAK_ROUNDS; ++round) {
         uint64_t c0 = s[0] ^ s[5] ^ s[10] ^ s[15] ^ s[20];
@@ -149,6 +166,7 @@ static void keccak_f1600_permute(uint64_t *s) {
         s[0] ^= k_round_constants[round];
     }
 }
+#endif
 
 void keccak(unsigned int rate,
             unsigned int capacity,

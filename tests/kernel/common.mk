@@ -73,6 +73,7 @@ $(PROJECT).elf: $(SRCS)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 run-rtlsim: $(PROJECT).bin
+	$(MAKE) -C $(ROOT_DIR)/sim/rtlsim DEBUG=$(DEBUG) CONFIGS='$(CONFIGS)'
 	$(ROOT_DIR)/sim/rtlsim/rtlsim $(PROJECT).bin
 
 run-simx: $(PROJECT).bin
