@@ -42,6 +42,16 @@ static void copy_bytes(uint8_t *dst, const uint8_t *src, uint32_t n) {
     }
 }
 
+static uint8_t low_bits_mask(uint32_t n_bits) {
+    if (n_bits == 0) {
+        return 0;
+    }
+    if (n_bits >= 8) {
+        return 0xff;
+    }
+    return (uint8_t)((1u << n_bits) - 1u);
+}
+
 #ifdef KECCAK_NATIVE
 static void keccak_f1600_permute(uint64_t *s) {
     for (uint32_t i = 0; i < KECCAK_STATE_LANES; ++i) {
@@ -175,10 +185,28 @@ void keccak(unsigned int rate,
             uint8_t delimited_suffix,
             uint8_t *output,
             uint64_t output_byte_len) {
+    keccak_bits(rate,
+                capacity,
+                input,
+                input_byte_len * 8U,
+                delimited_suffix,
+                output,
+                output_byte_len);
+}
+
+void keccak_bits(unsigned int rate,
+                 unsigned int capacity,
+                 const uint8_t *input,
+                 uint64_t input_bit_len,
+                 uint8_t delimited_suffix,
+                 uint8_t *output,
+                 uint64_t output_byte_len) {
     uint64_t state[KECCAK_STATE_LANES];
     uint8_t *state_bytes = (uint8_t *)state;
     unsigned int rate_in_bytes = rate / 8U;
     unsigned int block_size = 0;
+    uint64_t input_byte_len = input_bit_len / 8U;
+    uint32_t rem_bits = (uint32_t)(input_bit_len & 7U);
 
     if (((rate + capacity) != 1600U) || ((rate % 8U) != 0U)) {
         return;
@@ -202,10 +230,25 @@ void keccak(unsigned int rate,
         }
     }
 
-    state_bytes[block_size] ^= delimited_suffix;
-    if (((delimited_suffix & 0x80U) != 0U) && (block_size == (rate_in_bytes - 1U))) {
-        keccak_f1600_permute(state);
+    if (rem_bits != 0U) {
+        state_bytes[block_size] ^= input[0] & low_bits_mask(rem_bits);
     }
+
+    {
+        uint16_t suffix = (uint16_t)delimited_suffix << rem_bits;
+        state_bytes[block_size] ^= (uint8_t)(suffix & 0xffU);
+        if (((suffix & 0x80U) != 0U) && (block_size == (rate_in_bytes - 1U))) {
+            keccak_f1600_permute(state);
+        }
+        if ((suffix >> 8) != 0U) {
+            if (block_size == (rate_in_bytes - 1U)) {
+                state_bytes[0] ^= (uint8_t)(suffix >> 8);
+            } else {
+                state_bytes[block_size + 1U] ^= (uint8_t)(suffix >> 8);
+            }
+        }
+    }
+
     state_bytes[rate_in_bytes - 1U] ^= 0x80U;
     keccak_f1600_permute(state);
 
@@ -231,4 +274,14 @@ void sha3_256(const uint8_t *input, uint64_t input_byte_len, uint8_t *digest_out
            0x06,
            digest_out,
            KECCAK_SHA3_256_DIGEST_BYTES);
+}
+
+void sha3_256_bits(const uint8_t *input, uint64_t input_bit_len, uint8_t *digest_out) {
+    keccak_bits(KECCAK_SHA3_256_RATE_BITS,
+                KECCAK_SHA3_256_CAPACITY_BITS,
+                input,
+                input_bit_len,
+                0x06,
+                digest_out,
+                KECCAK_SHA3_256_DIGEST_BYTES);
 }

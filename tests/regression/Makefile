@@ -3,8 +3,10 @@ include $(ROOT_DIR)/config.mk
 
 all:
 	$(MAKE) -C aes256_bench
+	$(MAKE) -C keccak_bench
 	$(MAKE) -C sha256_bench
 	$(MAKE) -C aes_smoke
+	$(MAKE) -C keccak_smoke
 	$(MAKE) -C aes256
 	$(MAKE) -C basic
 	$(MAKE) -C basic_diag
@@ -29,6 +31,7 @@ all:
 
 run-simx:
 	$(MAKE) -C aes_smoke run-simx
+	$(MAKE) -C keccak_smoke run-simx
 	$(MAKE) -C aes256 run-simx
 	$(MAKE) -C basic run-simx
 	$(MAKE) -C basic_diag run-simx
@@ -53,6 +56,7 @@ run-simx:
 
 run-rtlsim:
 	$(MAKE) -C aes_smoke run-rtlsim
+	$(MAKE) -C keccak_smoke run-rtlsim
 	$(MAKE) -C aes256 run-rtlsim
 	$(MAKE) -C basic run-rtlsim
 	$(MAKE) -C basic_diag run-rtlsim
@@ -77,8 +81,10 @@ run-rtlsim:
 
 clean:
 	$(MAKE) -C aes256_bench clean
+	$(MAKE) -C keccak_bench clean
 	$(MAKE) -C sha256_bench clean
 	$(MAKE) -C aes_smoke clean
+	$(MAKE) -C keccak_smoke clean
 	$(MAKE) -C aes256 clean
 	$(MAKE) -C basic clean
 	$(MAKE) -C basic_diag clean

@@ -32,7 +32,7 @@ all: $(DESTDIR)/$(PROJECT)
 driver: $(DESTDIR)/libsimx.so
 
 $(DESTDIR)/libsimx.so: force
-	DESTDIR=$(DESTDIR) $(MAKE) -C $(ROOT_DIR)/sim/simx $(DESTDIR)/libsimx.so
+	DESTDIR=$(DESTDIR) $(MAKE) -C $(ROOT_DIR)/sim/simx DEBUG=$(DEBUG) CONFIGS='$(CONFIGS)' $(DESTDIR)/libsimx.so
 
 $(DESTDIR)/$(PROJECT): $(SRCS) $(DESTDIR)/libsimx.so $(CONFIG_FILE)
 	$(CXX) $(CXXFLAGS) $(SRCS) $(LDFLAGS) -o $@

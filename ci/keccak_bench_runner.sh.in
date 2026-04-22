@@ -1,0 +1,267 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+ROOT_DIR=$(realpath "$SCRIPT_DIR/..")
+
+show_usage() {
+    cat <<EOF
+Vortex Keccak Benchmark Runner
+
+Usage:
+  $0 [options]
+
+Options:
+  --driver=<simx|rtlsim|de10pro>    Backend driver (default: simx)
+  --accel-modes=<list>              Comma-separated modes (default: NATIVE)
+  --datasets=<list>                 Comma-separated dataset kinds (default: byte-long)
+  --messages=<n>                    Messages per hardware task (default: 1)
+  --cases=<n>                       Unique vectors loaded from the dataset file (default: 256)
+  --results=<path>                  TSV output path (default: keccak-bench-results.tsv)
+  --log-dir=<path>                  Run log directory (default: keccak-bench-logs)
+  --startup-addr=<hex>              Kernel startup address (default: XLEN-specific)
+  --ext-f-disable                   Build with EXT_F_DISABLE=1
+  --ext-d-disable                   Build with EXT_D_DISABLE=1
+  --fd-disable                      Shorthand for both ext-f-disable and ext-d-disable
+  --debug=<level>                   Debug level passed to simulators (default: 0)
+  --help                            Show this help
+
+Supported KECCAK_ACCEL_MODE values:
+  NATIVE, SOFTWARE
+
+Supported dataset kinds:
+  byte-short, byte-long, bit-short, bit-long
+
+Examples:
+  $0 --driver=simx --accel-modes=NATIVE,SOFTWARE --datasets=byte-short,byte-long --messages=2 --cases=64 --fd-disable
+  $0 --driver=rtlsim --accel-modes=NATIVE --datasets=byte-short --messages=1 --cases=16 --fd-disable
+  $0 --driver=de10pro --accel-modes=NATIVE --datasets=byte-long,bit-long --messages=2 --cases=256 --fd-disable
+EOF
+}
+
+die() {
+    echo "Error: $*" >&2
+    exit 1
+}
+
+run_cmd() {
+    echo "+ $*"
+    "$@"
+}
+
+format_number() {
+    local value="$1"
+    if [[ -z "$value" ]]; then
+        printf ''
+        return
+    fi
+    printf '%s' "$value" | perl -pe 's/(?<=\d)(?=(?:\d{3})+(?!\d))/,/g'
+}
+
+normalize_number() {
+    local value="$1"
+    printf '%s' "$value" | tr -d ','
+}
+
+join_flags() {
+    local result=()
+    if [[ "$EXT_F_DISABLE" -eq 1 ]]; then
+        result+=("EXT_F_DISABLE=1")
+    fi
+    if [[ "$EXT_D_DISABLE" -eq 1 ]]; then
+        result+=("EXT_D_DISABLE=1")
+    fi
+    printf '%s\n' "${result[@]}"
+}
+
+validate_accel_mode() {
+    case "$1" in
+        NATIVE|SOFTWARE)
+            ;;
+        *)
+            die "unsupported KECCAK_ACCEL_MODE=$1; supported: NATIVE SOFTWARE"
+            ;;
+    esac
+}
+
+validate_dataset() {
+    case "$1" in
+        byte-short|byte-long|bit-short|bit-long)
+            ;;
+        *)
+            die "unsupported dataset kind: $1"
+            ;;
+    esac
+}
+
+driver_configs() {
+    local need_native="$1"
+    if [[ "$need_native" -eq 1 ]]; then
+        printf '%s\n' "CONFIGS=-DEXT_KECCAK_ENABLE"
+    fi
+}
+
+build_driver_runtime() {
+    local need_native="$1"
+    case "$DRIVER" in
+        simx|rtlsim)
+            run_cmd make -C "$ROOT_DIR/runtime/stub" clean all
+            local args=("make" "-C" "$ROOT_DIR/runtime/$DRIVER" "clean" "all")
+            while IFS= read -r flag; do
+                [[ -n "$flag" ]] && args+=("$flag")
+            done < <(driver_configs "$need_native")
+            run_cmd env CCACHE_DISABLE=1 "${args[@]}"
+            ;;
+        de10pro)
+            run_cmd make -C "$ROOT_DIR/runtime/stub" clean all
+            local args=("make" "-C" "$ROOT_DIR/runtime/de10pro" "clean" "all")
+            while IFS= read -r flag; do
+                [[ -n "$flag" ]] && args+=("$flag")
+            done < <(driver_configs "$need_native")
+            run_cmd "${args[@]}"
+            export TERASIC_PCIE_SO_PATH="${TERASIC_PCIE_SO_PATH:-$ROOT_DIR/../PCIe_SW_KIT/PCIe_DDR4/32G/terasic_pcie_qsys.so}"
+            export DE10PRO_VX_TIMEOUT_MS="${DE10PRO_VX_TIMEOUT_MS:-5000}"
+            export DE10PRO_VX_VERBOSE_STATUS="${DE10PRO_VX_VERBOSE_STATUS:-1}"
+            export DE10PRO_VX_BAR="${DE10PRO_VX_BAR:-4}"
+            export DE10PRO_VX_MMIO_BASE="${DE10PRO_VX_MMIO_BASE:-0x4001000}"
+            export DE10PRO_VX_STAGING_ADDR="${DE10PRO_VX_STAGING_ADDR:-0x800000000}"
+            export DE10PRO_VX_STAGING_SIZE="${DE10PRO_VX_STAGING_SIZE:-0x200000}"
+            ;;
+        *)
+            die "unsupported driver: $DRIVER"
+            ;;
+    esac
+}
+
+extract_field() {
+    local pattern="$1"
+    local file="$2"
+    grep "^KECCAK_BENCH: .*${pattern}=" "$file" | tail -n 1 | sed -nE "s/.*${pattern}=([0-9,xa-fA-F-]+).*/\\1/p" | tr -d ',' || true
+}
+
+extract_perf() {
+    local file="$1"
+    local line
+    line=$(grep 'PERF: instrs=' "$file" | tail -n 1 || true)
+    if [[ -z "$line" ]]; then
+        printf '\t\t'
+        return
+    fi
+    printf '%s' "$line" | sed -E 's/.*instrs=([0-9,]+), cycles=([0-9,]+), IPC=([0-9.]+).*/\1\t\2\t\3/' | tr -d ','
+}
+
+main() {
+    DRIVER="simx"
+    STARTUP_ADDR=""
+    EXT_F_DISABLE=0
+    EXT_D_DISABLE=0
+    DEBUG_LEVEL=0
+    MESSAGES="1"
+    CASES="256"
+    RESULTS="keccak-bench-results.tsv"
+    LOG_DIR="keccak-bench-logs"
+    accel_mode_list="NATIVE"
+    dataset_list="byte-long"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --driver=*) DRIVER="${1#*=}" ;;
+            --accel-modes=*) accel_mode_list="${1#*=}" ;;
+            --datasets=*) dataset_list="${1#*=}" ;;
+            --messages=*) MESSAGES="${1#*=}" ;;
+            --cases=*) CASES="${1#*=}" ;;
+            --results=*) RESULTS="${1#*=}" ;;
+            --log-dir=*) LOG_DIR="${1#*=}" ;;
+            --startup-addr=*) STARTUP_ADDR="${1#*=}" ;;
+            --ext-f-disable) EXT_F_DISABLE=1 ;;
+            --ext-d-disable) EXT_D_DISABLE=1 ;;
+            --fd-disable) EXT_F_DISABLE=1; EXT_D_DISABLE=1 ;;
+            --debug=*) DEBUG_LEVEL="${1#*=}" ;;
+            --help|-h) show_usage; exit 0 ;;
+            *) die "unknown option: $1" ;;
+        esac
+        shift
+    done
+
+    IFS=',' read -r -a ACCEL_MODES <<< "$accel_mode_list"
+    IFS=',' read -r -a DATASETS <<< "$dataset_list"
+
+    local need_native=0
+    local mode
+    for mode in "${ACCEL_MODES[@]}"; do
+        validate_accel_mode "$mode"
+        if [[ "$mode" == "NATIVE" ]]; then
+            need_native=1
+        fi
+    done
+
+    local dataset
+    for dataset in "${DATASETS[@]}"; do
+        validate_dataset "$dataset"
+    done
+
+    XLEN=$(sed -n 's/^XLEN[[:space:]]*?=[[:space:]]*//p' "$ROOT_DIR/config.mk" | head -n1 | tr -d '[:space:]')
+    if [[ -z "$STARTUP_ADDR" ]]; then
+        if [[ "$XLEN" == "64" ]]; then
+            STARTUP_ADDR="0x180000000"
+        else
+            STARTUP_ADDR="0x80000000"
+        fi
+    fi
+
+    if [[ -f "$ROOT_DIR/ci/toolchain_env.sh" ]]; then
+        # shellcheck disable=SC1091
+        source "$ROOT_DIR/ci/toolchain_env.sh"
+    fi
+
+    mkdir -p "$LOG_DIR"
+
+    run_cmd make -C "$ROOT_DIR/hw" config
+
+    local kernel_args=("make" "-C" "$ROOT_DIR/kernel" "clean" "all")
+    while IFS= read -r flag; do
+        [[ -n "$flag" ]] && kernel_args+=("$flag")
+    done < <(join_flags)
+    run_cmd "${kernel_args[@]}"
+
+    build_driver_runtime "$need_native"
+
+    printf 'algo\taccel_mode\tdataset\tdriver\tmessages_per_task\tdataset_cases\ttotal_messages\ttotal_bits\tdigest_checksum\tinstrs\tcycles\tipc\tstatus\tlog\n' > "$RESULTS"
+
+    local app_dir="$ROOT_DIR/tests/regression/keccak_bench"
+    local failures=0
+    for mode in "${ACCEL_MODES[@]}"; do
+        local build_args=("make" "-C" "$app_dir" "clean" "all" "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR" "KECCAK_ACCEL_MODE=$mode")
+        while IFS= read -r flag; do
+            [[ -n "$flag" ]] && build_args+=("$flag")
+        done < <(join_flags)
+        run_cmd "${build_args[@]}"
+
+        for dataset in "${DATASETS[@]}"; do
+            local log_file="$LOG_DIR/keccak-bench-${mode}-${dataset}-${DRIVER}.log"
+            local status
+            if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$DRIVER" "KECCAK_ACCEL_MODE=$mode" "OPTS=-n $MESSAGES -c $CASES -d $dataset" >"$log_file" 2>&1; then
+                status="PASS"
+            else
+                status="FAIL"
+                failures=$((failures + 1))
+            fi
+
+            local total_messages total_bits digest_checksum perf
+            total_messages=$(extract_field "total_messages" "$log_file")
+            total_bits=$(extract_field "total_bits" "$log_file")
+            digest_checksum=$(extract_field "digest_checksum" "$log_file")
+            perf=$(extract_perf "$log_file")
+            printf 'keccak\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$mode" "$dataset" "$DRIVER" \
+                "$(format_number "$MESSAGES")" "$(format_number "$CASES")" \
+                "$(format_number "$total_messages")" "$(format_number "$total_bits")" "$digest_checksum" \
+                $(printf '%s' "$perf") "$status" "$log_file" >> "$RESULTS"
+        done
+    done
+
+    [[ "$failures" -eq 0 ]]
+}
+
+main "$@"
