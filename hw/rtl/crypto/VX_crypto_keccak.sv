@@ -2,7 +2,9 @@
 
 module VX_crypto_keccak import VX_gpu_pkg::*; #(
     parameter `STRING INSTANCE_ID = "",
-    parameter NUM_LANES = 1
+    parameter NUM_LANES = 1,
+    parameter BLOCK_SIZE = 1,
+    parameter BLOCK_IDX = 0
 ) (
     input wire              clk,
     input wire              reset,
@@ -12,17 +14,22 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
 );
     `UNUSED_SPARAM(INSTANCE_ID)
     `UNUSED_VAR(execute_if.data.rs3_data)
+    `UNUSED_PARAM(BLOCK_IDX)
+    `STATIC_ASSERT (`IS_DIVISBLE(`NUM_WARPS, BLOCK_SIZE), ("invalid parameter"))
 
     typedef logic [4:0][4:0][63:0] keccak_state_t;
 
     localparam PID_WIDTH = `LOG2UP(`NUM_THREADS / NUM_LANES);
     localparam META_DATAW = UUID_WIDTH + NW_WIDTH + NUM_LANES + PC_BITS + 1 + NUM_REGS_BITS + PID_WIDTH + 1 + 1;
+    localparam STATE_WARPS = `NUM_WARPS / BLOCK_SIZE;
+    localparam STATE_WID_BITS = `CLOG2(STATE_WARPS);
+    localparam STATE_WID_WIDTH = `UP(STATE_WID_BITS);
 
     localparam ST_IDLE    = 2'd0;
     localparam ST_PERMUTE = 2'd1;
     localparam ST_RESP    = 2'd2;
 
-    keccak_state_t state_mem [`NUM_WARPS];
+    keccak_state_t state_mem [STATE_WARPS];
     keccak_state_t perm_state_r;
     keccak_state_t perm_state_n;
 
@@ -36,6 +43,18 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
     wire [4:0] read_lane_idx = execute_if.data.rs1_data[0][4:0];
     wire [63:0] lane_data_in = execute_if.data.rs1_data[0];
     wire [63:0] lane_data_out;
+
+    function automatic [STATE_WID_WIDTH-1:0] keccak_state_idx(input [NW_WIDTH-1:0] wid);
+        begin
+            if (BLOCK_SIZE == 1) begin
+                keccak_state_idx = STATE_WID_WIDTH'(wid);
+            end else if (BLOCK_SIZE == `NUM_WARPS) begin
+                keccak_state_idx = '0;
+            end else begin
+                keccak_state_idx = STATE_WID_WIDTH'(wid_to_wis(wid));
+            end
+        end
+    endfunction
 
     function automatic [63:0] rotl64(input [63:0] value, input integer shamt);
         begin
@@ -171,7 +190,7 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
     endfunction
 
     assign perm_state_n = keccak_round(perm_state_r, round_ctr_r);
-    assign lane_data_out = keccak_lane_get(state_mem[execute_if.data.wid], read_lane_idx);
+    assign lane_data_out = keccak_lane_get(state_mem[keccak_state_idx(execute_if.data.wid)], read_lane_idx);
 
     wire execute_fire = (state_r == ST_IDLE) && execute_if.valid;
     wire do_write = (execute_if.data.op_type == INST_CRYPTO_KECCAK_WR);
@@ -188,7 +207,7 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
             meta_r <= '0;
             pending_data_r <= '0;
             perm_state_r <= '0;
-            for (w = 0; w < `NUM_WARPS; ++w) begin
+            for (w = 0; w < STATE_WARPS; ++w) begin
                 state_mem[w] <= '0;
             end
         end else begin
@@ -201,16 +220,16 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
                         wid_r <= execute_if.data.wid;
                         pending_data_r <= '0;
                         if (do_write) begin
-                            state_mem[execute_if.data.wid] <= keccak_lane_set(state_mem[execute_if.data.wid], lane_idx, lane_data_in, 1'b0);
+                            state_mem[keccak_state_idx(execute_if.data.wid)] <= keccak_lane_set(state_mem[keccak_state_idx(execute_if.data.wid)], lane_idx, lane_data_in, 1'b0);
                             state_r <= ST_RESP;
                         end else if (do_xor) begin
-                            state_mem[execute_if.data.wid] <= keccak_lane_set(state_mem[execute_if.data.wid], lane_idx, lane_data_in, 1'b1);
+                            state_mem[keccak_state_idx(execute_if.data.wid)] <= keccak_lane_set(state_mem[keccak_state_idx(execute_if.data.wid)], lane_idx, lane_data_in, 1'b1);
                             state_r <= ST_RESP;
                         end else if (do_read) begin
                             pending_data_r <= lane_data_out;
                             state_r <= ST_RESP;
                         end else if (do_perm) begin
-                            perm_state_r <= state_mem[execute_if.data.wid];
+                            perm_state_r <= state_mem[keccak_state_idx(execute_if.data.wid)];
                             round_ctr_r <= '0;
                             state_r <= ST_PERMUTE;
                         end else begin
@@ -221,7 +240,7 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
                 ST_PERMUTE: begin
                     perm_state_r <= perm_state_n;
                     if (round_ctr_r == 5'd23) begin
-                        state_mem[wid_r] <= perm_state_n;
+                        state_mem[keccak_state_idx(wid_r)] <= perm_state_n;
                         pending_data_r <= '0;
                         state_r <= ST_RESP;
                     end else begin

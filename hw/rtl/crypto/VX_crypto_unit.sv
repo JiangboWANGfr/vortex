@@ -27,9 +27,10 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
 );
 
     `UNUSED_SPARAM (INSTANCE_ID)
-    // Keep crypto execution serialized through a single block so stateful units
-    // such as Keccak see a coherent per-warp context across instructions.
-    localparam BLOCK_SIZE   = 1;
+    // wid encodes the issue slot in its low bits, so using one crypto block per
+    // issue slot preserves a stable warp-to-block affinity for Keccak without
+    // forcing the whole crypto unit through a single serialized block.
+    localparam BLOCK_SIZE   = `ISSUE_WIDTH;
     localparam NUM_LANES    = `NUM_ALU_LANES;
     localparam PARTIAL_BW   = (BLOCK_SIZE != `ISSUE_WIDTH) || (NUM_LANES != `SIMD_WIDTH);
     localparam PE_COUNT     = 1 + `EXT_SHA256_ENABLED + `EXT_KECCAK_ENABLED;
@@ -128,7 +129,9 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
     `ifdef EXT_KECCAK_ENABLE
         VX_crypto_keccak #(
             .INSTANCE_ID (`SFORMATF(("%s-keccak%0d", INSTANCE_ID, block_idx))),
-            .NUM_LANES   (NUM_LANES)
+            .NUM_LANES   (NUM_LANES),
+            .BLOCK_SIZE  (BLOCK_SIZE),
+            .BLOCK_IDX   (block_idx)
         ) keccak_unit (
             .clk        (clk),
             .reset      (reset),
