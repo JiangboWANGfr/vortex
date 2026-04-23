@@ -20,9 +20,18 @@ LDFLAGS += -L$(DESTDIR) -lrtlsim
 
 SRCS := $(SRC_DIR)/vortex.cpp
 
+DEBUG_MODE := $(strip $(DEBUG))
+ifeq ($(DEBUG_MODE),release)
+DEBUG_MODE :=
+endif
+
 # Debugging
-ifdef DEBUG
+ifneq ($(DEBUG_MODE),)
+ifeq ($(DEBUG_MODE),0)
+	CXXFLAGS += -O2 -DNDEBUG
+else
 	CXXFLAGS += -g -O0
+endif
 else
 	CXXFLAGS += -O2 -DNDEBUG
 endif

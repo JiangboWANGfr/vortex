@@ -129,7 +129,7 @@ build_driver_runtime() {
             while IFS= read -r flag; do
                 [[ -n "$flag" ]] && args+=("$flag")
             done < <(driver_configs "$need_native")
-            run_cmd env CCACHE_DISABLE=1 "${args[@]}"
+            run_cmd env -u DEBUG CCACHE_DISABLE=1 "${args[@]}" "DEBUG=$DEBUG_LEVEL"
             ;;
         de10pro)
             run_cmd make -C "$ROOT_DIR/runtime/stub" clean all

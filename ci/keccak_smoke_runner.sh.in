@@ -96,7 +96,7 @@ build_driver_runtime() {
     done < <(driver_configs "$need_native")
     case "$driver" in
         simx|rtlsim)
-            args=("env" "CCACHE_DISABLE=1" "${args[@]}")
+            args=("env" "-u" "DEBUG" "CCACHE_DISABLE=1" "${args[@]}" "DEBUG=$DEBUG_LEVEL")
             ;;
         de10pro)
             export TERASIC_PCIE_SO_PATH="${TERASIC_PCIE_SO_PATH:-$ROOT_DIR/../PCIe_SW_KIT/PCIe_DDR4/32G/terasic_pcie_qsys.so}"

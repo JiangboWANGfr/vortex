@@ -27,6 +27,11 @@ SRCS += $(SRC_DIR)/execute.cpp $(SRC_DIR)/func_unit.cpp
 SRCS += $(SRC_DIR)/cache_sim.cpp $(SRC_DIR)/mem_sim.cpp $(SRC_DIR)/local_mem.cpp $(SRC_DIR)/mem_coalescer.cpp
 SRCS += $(SRC_DIR)/dcrs.cpp $(SRC_DIR)/types.cpp
 
+DEBUG_MODE := $(strip $(DEBUG))
+ifeq ($(DEBUG_MODE),release)
+DEBUG_MODE :=
+endif
+
 # Add V extension sources
 ifneq ($(findstring -DEXT_V_ENABLE, $(CONFIGS)),)
   	SRCS += $(SRC_DIR)/voperands.cpp
@@ -41,10 +46,14 @@ ifneq ($(findstring -DEXT_TCU_ENABLE, $(CONFIGS)),)
 endif
 
 # Debugging
-ifdef DEBUG
-	CXXFLAGS += -g -O0 -DDEBUG_LEVEL=$(DEBUG)
+ifneq ($(DEBUG_MODE),)
+ifeq ($(DEBUG_MODE),0)
+	CXXFLAGS += -O2 -DNDEBUG -DDEBUG_LEVEL=0
 else
-	CXXFLAGS += -O2 -DNDEBUG
+	CXXFLAGS += -g -O0 -DDEBUG_LEVEL=$(DEBUG_MODE)
+endif
+else
+	CXXFLAGS += -O2 -DNDEBUG -DDEBUG_LEVEL=0
 endif
 
 # Enable perf counters

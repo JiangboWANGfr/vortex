@@ -27,7 +27,10 @@ DBG_TRACE_FLAGS += -DDBG_TRACE_SCOPE
 DBG_TRACE_FLAGS += -DDBG_TRACE_GBAR
 DBG_TRACE_FLAGS += -DDBG_TRACE_TCU
 
-DBG_FLAGS += -DDEBUG_LEVEL=$(DEBUG) -DVCD_OUTPUT $(DBG_TRACE_FLAGS)
+DEBUG_MODE := $(strip $(DEBUG))
+ifeq ($(DEBUG_MODE),release)
+DEBUG_MODE :=
+endif
 
 RTL_PKGS = $(RTL_DIR)/VX_gpu_pkg.sv $(RTL_DIR)/fpu/VX_fpu_pkg.sv
 
@@ -93,12 +96,18 @@ VL_FLAGS += -j $(THREADS)
 #VL_FLAGS += --threads $(THREADS)
 
 # Debugging
-ifdef DEBUG
+ifneq ($(DEBUG_MODE),)
+ifeq ($(DEBUG_MODE),0)
+	VL_FLAGS += -DNDEBUG
+	CXXFLAGS += -O2 -DNDEBUG -DDEBUG_LEVEL=0
+else
+	DBG_FLAGS += -DDEBUG_LEVEL=$(DEBUG_MODE) -DVCD_OUTPUT $(DBG_TRACE_FLAGS)
 	VL_FLAGS += --trace --trace-structs $(DBG_FLAGS)
 	CXXFLAGS += -g -O0 $(DBG_FLAGS)
+endif
 else
 	VL_FLAGS += -DNDEBUG
-	CXXFLAGS += -O2 -DNDEBUG
+	CXXFLAGS += -O2 -DNDEBUG -DDEBUG_LEVEL=0
 endif
 
 # Enable perf counters
