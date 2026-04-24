@@ -181,9 +181,10 @@ module VX_decode import VX_gpu_pkg::*; #(
                 end
             `endif
             `ifdef XLEN_64
-                `ifdef EXT_SHA256_ENABLE
+                `ifdef EXT_AES_ENABLE
+                    `ifdef EXT_SHA256_ENABLE
                 else
-                `endif
+                    `endif
                 if (funct3 == 3'h1) begin
                     if (u_12 == 12'h300) begin
                         ex_type = EX_CRYPTO;
@@ -199,6 +200,7 @@ module VX_decode import VX_gpu_pkg::*; #(
                         op_type = INST_OP_BITS'(INST_CRYPTO_AES64KS1I);
                     end
                 end
+                `endif
             `endif
             end
             INST_R: begin
@@ -209,6 +211,7 @@ module VX_decode import VX_gpu_pkg::*; #(
                 `USED_IREG (rd);
                 `USED_IREG (rs1);
                 `USED_IREG (rs2);
+            `ifdef EXT_AES_ENABLE
             `ifdef XLEN_64
                 if (funct3 == 3'h0 && (funct7 == 7'h19 || funct7 == 7'h1b || funct7 == 7'h1d || funct7 == 7'h1f || funct7 == 7'h3f)) begin
                     ex_type = EX_CRYPTO;
@@ -238,6 +241,7 @@ module VX_decode import VX_gpu_pkg::*; #(
                     endcase
                 end else begin
             `endif
+            `endif
                     case (funct7)
                     `ifdef EXT_M_ENABLE
                         INST_R_F7_MUL: begin
@@ -258,7 +262,9 @@ module VX_decode import VX_gpu_pkg::*; #(
                             op_args.alu.xtype = ALU_TYPE_ARITH;
                         end
                     endcase
+            `ifdef EXT_AES_ENABLE
                 end
+            `endif
             end
         `ifdef XLEN_64
             INST_I_W: begin

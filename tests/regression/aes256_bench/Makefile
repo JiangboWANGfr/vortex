@@ -23,7 +23,7 @@ SRCS := $(SRC_DIR)/main.cpp
 VX_SRCS := $(SRC_DIR)/kernel.cpp $(VORTEX_HOME)/tests/kernel/aes256/aes256-impl.c $(VORTEX_HOME)/tests/kernel/aes256/tables.c
 
 ifeq ($(CRYPTO_ACCEL_MODE),NATIVE)
-  CONFIGS += -DAES_NATIVE
+  CONFIGS += -DAES_NATIVE -DEXT_AES_ENABLE
 else ifeq ($(CRYPTO_ACCEL_MODE),SOFTWARE)
   CONFIGS += -DAES_SOFTWARE
 else ifeq ($(CRYPTO_ACCEL_MODE),TABLE)

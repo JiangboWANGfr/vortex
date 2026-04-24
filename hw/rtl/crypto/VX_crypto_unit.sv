@@ -33,18 +33,17 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
     localparam BLOCK_SIZE   = `ISSUE_WIDTH;
     localparam NUM_LANES    = `NUM_ALU_LANES;
     localparam PARTIAL_BW   = (BLOCK_SIZE != `ISSUE_WIDTH) || (NUM_LANES != `SIMD_WIDTH);
-    localparam PE_COUNT     = 1 + `EXT_SHA256_ENABLED + `EXT_KECCAK_ENABLED;
+    localparam ACTIVE_PE_COUNT = `EXT_AES_ENABLED + `EXT_SHA256_ENABLED + `EXT_KECCAK_ENABLED;
+    localparam PE_COUNT     = `UP(ACTIVE_PE_COUNT);
     localparam PE_SEL_BITS  = `CLOG2(PE_COUNT);
+`ifdef EXT_AES_ENABLE
     localparam PE_IDX_AES   = 0;
+`endif
 `ifdef EXT_SHA256_ENABLE
-    localparam PE_IDX_SHA   = PE_IDX_AES + 1;
+    localparam PE_IDX_SHA   = `EXT_AES_ENABLED;
 `endif
 `ifdef EXT_KECCAK_ENABLE
-`ifdef EXT_SHA256_ENABLE
-    localparam PE_IDX_KECCAK = PE_IDX_SHA + 1;
-`else
-    localparam PE_IDX_KECCAK = PE_IDX_AES + 1;
-`endif
+    localparam PE_IDX_KECCAK = `EXT_AES_ENABLED + `EXT_SHA256_ENABLED;
 `endif
 
     VX_execute_if #(
@@ -77,7 +76,11 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
 
         reg [`UP(PE_SEL_BITS)-1:0] pe_select;
         always @(*) begin
-            pe_select = PE_IDX_AES;
+            pe_select = '0;
+        `ifdef EXT_AES_ENABLE
+            if (per_block_execute_if[block_idx].data.op_args.crypto.unit == CRYPTO_CLASS_AES)
+                pe_select = PE_IDX_AES;
+        `endif
         `ifdef EXT_SHA256_ENABLE
             if (per_block_execute_if[block_idx].data.op_args.crypto.unit == CRYPTO_CLASS_SHA)
                 pe_select = PE_IDX_SHA;
@@ -104,6 +107,7 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
             .result_in_if   (pe_result_if)
         );
 
+    `ifdef EXT_AES_ENABLE
         VX_crypto_aes #(
             .INSTANCE_ID (`SFORMATF(("%s-aes%0d", INSTANCE_ID, block_idx))),
             .NUM_LANES   (NUM_LANES)
@@ -113,6 +117,7 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
             .execute_if (pe_execute_if[PE_IDX_AES]),
             .result_if  (pe_result_if[PE_IDX_AES])
         );
+    `endif
 
     `ifdef EXT_SHA256_ENABLE
         VX_crypto_sha #(
@@ -139,6 +144,12 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
             .result_if  (pe_result_if[PE_IDX_KECCAK])
         );
     `endif
+
+        if (ACTIVE_PE_COUNT == 0) begin : g_no_crypto_pe
+            assign pe_execute_if[0].ready = 1'b1;
+            assign pe_result_if[0].valid = 1'b0;
+            assign pe_result_if[0].data = 'x;
+        end
     end
 
     VX_gather_unit #(

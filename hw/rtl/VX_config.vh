@@ -896,6 +896,12 @@
     `define EXT_ZICOND_ENABLED 0
 `endif
 
+`ifdef EXT_AES_ENABLE
+    `define EXT_AES_ENABLED 1
+`else
+    `define EXT_AES_ENABLED 0
+`endif
+
 `ifdef EXT_SHA256_ENABLE
     `define EXT_SHA256_ENABLED 1
 `else
