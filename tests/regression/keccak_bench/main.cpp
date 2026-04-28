@@ -132,10 +132,10 @@ static uint64_t compute_num_tasks(uint64_t num_cores,
                                   uint64_t dataset_size,
                                   uint32_t messages_per_task) {
 #ifdef KECCAK_BENCH_DISPATCH_WARP
+  (void)num_threads;
   uint64_t warp_slots = num_cores * num_warps;
   uint64_t dataset_warps = ceil_div_u64(dataset_size, messages_per_task);
-  uint64_t warp_tasks = std::max<uint64_t>(warp_slots, dataset_warps);
-  return warp_tasks * num_threads;
+  return std::max<uint64_t>(warp_slots, dataset_warps);
 #else
   uint64_t lane_slots = num_cores * num_warps * num_threads;
   uint64_t lane_tasks = std::max<uint64_t>(lane_slots, ceil_div_u64(dataset_size, messages_per_task));
@@ -143,22 +143,11 @@ static uint64_t compute_num_tasks(uint64_t num_cores,
 #endif
 }
 
-static uint64_t dispatch_task_id(uint64_t task_id, uint64_t num_threads) {
-#ifdef KECCAK_BENCH_DISPATCH_WARP
-  return task_id / num_threads;
-#else
-  (void)num_threads;
-  return task_id;
-#endif
-}
-
 static const keccak_test::KeccakVector& select_vector(const std::vector<keccak_test::KeccakVector>& dataset,
                                                       uint64_t task_id,
-                                                      uint64_t num_threads,
                                                       uint32_t messages_per_task,
                                                       uint32_t slot_idx) {
-  uint64_t unit_task_id = dispatch_task_id(task_id, num_threads);
-  return dataset[(unit_task_id * messages_per_task + slot_idx) % dataset.size()];
+  return dataset[(task_id * messages_per_task + slot_idx) % dataset.size()];
 }
 
 int main(int argc, char** argv) {
@@ -183,7 +172,8 @@ int main(int argc, char** argv) {
     RT_CHECK(vx_dev_caps(device, VX_CAPS_NUM_THREADS, &num_threads));
 
     uint64_t num_tasks64 = compute_num_tasks(num_cores, num_warps, num_threads, dataset.size(), messages_per_task);
-    if (num_tasks64 == 0 || num_tasks64 > std::numeric_limits<uint32_t>::max()) {
+    if (num_tasks64 == 0 || num_tasks64 > std::numeric_limits<uint32_t>::max() ||
+        num_threads == 0 || num_threads > std::numeric_limits<uint32_t>::max()) {
       std::cerr << "invalid device task count: " << num_tasks64 << std::endl;
       cleanup();
       return -1;
@@ -230,7 +220,7 @@ int main(int argc, char** argv) {
     for (uint64_t task_id = 0; task_id < num_tasks64; ++task_id) {
       for (uint32_t i = 0; i < messages_per_task; ++i) {
         uint64_t msg_idx = task_id * messages_per_task + i;
-        const auto& vec = select_vector(dataset, task_id, num_threads, messages_per_task, i);
+        const auto& vec = select_vector(dataset, task_id, messages_per_task, i);
         std::memcpy(msg_data.data() + (msg_idx * msg_stride), vec.msg.data(), keccak_test::bytes_for_bits(vec.bit_len));
         bit_lens[msg_idx] = vec.bit_len;
         std::memcpy(expected.data() + (msg_idx * keccak_test::kKeccakDigestBytes), vec.digest.data(), vec.digest.size());
@@ -271,7 +261,7 @@ int main(int argc, char** argv) {
       for (uint32_t i = 0; i < messages_per_task; ++i) {
         uint64_t msg_idx = task_id * messages_per_task + i;
         if (digest_matches(digest.data() + (msg_idx * keccak_test::kKeccakDigestBytes),
-                           select_vector(dataset, task_id, num_threads, messages_per_task, i).digest)) {
+                           select_vector(dataset, task_id, messages_per_task, i).digest)) {
           continue;
         }
         ++errors;

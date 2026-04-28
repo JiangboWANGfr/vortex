@@ -13,6 +13,9 @@ struct TaskArgs {
 };
 
 void keccak_worker(const TaskArgs* __UNIFORM__ args) {
+#ifdef KECCAK_BENCH_DISPATCH_WARP
+  vx_tmc_one();
+#endif
   uint32_t task_id = blockIdx.x;
   uint32_t start_msg = task_id * args->messages_per_task;
 
@@ -54,7 +57,12 @@ int main() {
     status->total_bits += task_args.bit_lens[i];
   }
 
+#ifdef KECCAK_BENCH_DISPATCH_WARP
+  uint32_t block_dim = vx_num_threads();
+  vx_spawn_threads(1, &arg->num_tasks, &block_dim, (vx_kernel_func_cb)keccak_worker, &task_args);
+#else
   vx_spawn_threads(1, &arg->num_tasks, nullptr, (vx_kernel_func_cb)keccak_worker, &task_args);
+#endif
   status->completed_tasks = arg->num_tasks;
   return 0;
 }
