@@ -203,10 +203,15 @@ void keccak_bits(unsigned int rate,
                  uint64_t output_byte_len) {
     uint64_t state[KECCAK_STATE_LANES];
     uint8_t *state_bytes = (uint8_t *)state;
-    unsigned int rate_in_bytes = rate / 8U;
+    // 对 SHA3-256：
+    // rate = 1088 bits
+    // rate_in_bytes = 1088 / 8 = 136 bytes
+    // 也就是每一轮 absorb 最多吃 136 字节。
+    unsigned int rate_in_bytes = rate / 8U;  // rate 必须是 8 的倍数，对于 SHA3-256 来说是 1088 bits，也就是 136 bytes
     unsigned int block_size = 0;
     uint64_t input_byte_len = input_bit_len / 8U;
-    uint32_t rem_bits = (uint32_t)(input_bit_len & 7U);
+    // 输入中剩余的非整字节 bit 数，input_bit_len & 7也就是 input_bit_len % 8。
+    uint32_t rem_bits = (uint32_t)(input_bit_len & 7U); 
 
     if (((rate + capacity) != 1600U) || ((rate % 8U) != 0U)) {
         return;
@@ -214,6 +219,11 @@ void keccak_bits(unsigned int rate,
 
     zero_bytes(state_bytes, sizeof(state));
 
+    // 每次最多吸收 rate_in_bytes 字节；
+    // 吸收方式是 XOR：
+    //     state_bytes[i] ^= input[i]
+    // 如果刚好吸满一个 rate block：
+    //     执行 Keccak-f1600 permutation
     while (input_byte_len > 0) {
         block_size = input_byte_len < rate_in_bytes
                          ? (unsigned int)input_byte_len
@@ -221,22 +231,29 @@ void keccak_bits(unsigned int rate,
         for (unsigned int i = 0; i < block_size; ++i) {
             state_bytes[i] ^= input[i];
         }
-        input += block_size;
+        input += block_size; // 输入指针前移 block_size 字节
         input_byte_len -= block_size;
 
         if (block_size == rate_in_bytes) {
             keccak_f1600_permute(state);
-            block_size = 0;
+            block_size = 0; // 输入长度刚好等于 rate 时，suffix 加在新 block 开头
         }
     }
-
+    // 吸收最后剩余的非整字节部分。前面 while 已经吸收了完整的 1 个 byte。这里还要吸收下一字节的低 5 bit
     if (rem_bits != 0U) {
+        //input[0] 不是原始的第一个 byte，而是剩余 bit 所在的那个 byte。 
         state_bytes[block_size] ^= input[0] & low_bits_mask(rem_bits);
     }
-
+    // 加 delimited_suffix
     {
+        // 左移 rem_bits :如果消息不是整字节对齐，比如还有 5 个剩余 bit：rem_bits = 5
+        // 那么 suffix 不能从 byte 的 bit0 开始，而要紧跟在这 5 个 bit 后面。所以要：suffix = 0x06 << 5
+        // 也就是把 suffix 放到当前 byte 的更高 bit 位置。
+        // 左移以后可能超过 8 bit。所以用 uint16_t 来保存这个值，防止溢出。比如 0x06 << 5 = 0xC0，左移后已经占满一个 byte，如果再有剩余 bit 比如 rem_bits=6，那么 suffix 就是 0x06 << 6 = 0x180，已经超过一个 byte，所以需要 uint16_t 来保存。
         uint16_t suffix = (uint16_t)delimited_suffix << rem_bits;
+        // 把 suffix 的低 8 bit XOR 到当前 byte。
         state_bytes[block_size] ^= (uint8_t)(suffix & 0xffU);
+        // suffix 的最高位已经占用了当前 block 的最后一个 byte 的 bit7。并且当前 byte 刚好是 rate block 的最后一个 byte,可是后面还要添加最终 padding,为了避免两个 padding 规则冲突，这里先执行一次 permutation，开始一个新的 block
         if (((suffix & 0x80U) != 0U) && (block_size == (rate_in_bytes - 1U))) {
             keccak_f1600_permute(state);
         }
@@ -249,15 +266,16 @@ void keccak_bits(unsigned int rate,
         }
     }
 
-    state_bytes[rate_in_bytes - 1U] ^= 0x80U;
+    state_bytes[rate_in_bytes - 1U] ^= 0x80U; // 最后的 padding 规则：在当前 block 的最后一个 byte 的最高 bit 位置添加一个 1。也就是把这个 byte 和 0x80 做 XOR。
     keccak_f1600_permute(state);
-
+    // 从 state_bytes 里每次输出 rate_in_bytes 字节，直到输出完 output_byte_len 字节。
+    // 对于 SHA3-256 来说，rate_in_bytes=136，digest_bytes=32，所以只需要输出一次就能得到完整 digest，不需要第二次 permutation。
     while (output_byte_len > 0) {
         block_size = output_byte_len < rate_in_bytes
                          ? (unsigned int)output_byte_len
                          : rate_in_bytes;
         copy_bytes(output, state_bytes, block_size);
-        output += block_size;
+        output += block_size; // 输出指针前移 block_size 字节
         output_byte_len -= block_size;
 
         if (output_byte_len > 0) {

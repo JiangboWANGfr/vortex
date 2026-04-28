@@ -19,12 +19,38 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
 
     typedef logic [4:0][4:0][63:0] keccak_state_t;
 
+    //pid 一个 warp 的所有 thread lane 不能一次进入执行单元，需要被拆成多个 packet。
     localparam PID_WIDTH = `LOG2UP(`NUM_THREADS / NUM_LANES);
+    // META_DATAW 定义了在处理器和执行单元之间传递的元数据宽度，包括：
+    // {
+    // uuid  : 动态指令编号，debug/trace 用
+    // wid   : warp id，说明这条指令属于哪个 warp
+    // tmask : 哪些 SIMD lane/thread 是 active
+    // PC    : 指令 PC
+    // wb    : 是否需要写回寄存器
+    // rd    : 目的寄存器编号
+    // pid   : partial SIMD packet id
+    // sop   : start of packet
+    // eop   : end of packet
+    // }
+    //F1600 是多周期操作，输入来的时候这些信息在 execute_if.data 里；等 24 轮 permutation 完成后，execute_if.data 可能已经不是原来的指令了。所以要把它们锁存到 meta_r。源码里 ST_IDLE 接收请求时，把这些字段打包进 meta_r；输出时再从 meta_r 解包到 result_if.data。
     localparam META_DATAW = UUID_WIDTH + NW_WIDTH + NUM_LANES + PC_BITS + 1 + NUM_REGS_BITS + PID_WIDTH + 1 + 1;
+    // STATE_WARPS 表示当前这个 VX_crypto_keccak 实例内部要保存多少份 Keccak state。
+    // 因为 crypto unit 里可能有多个 Keccak block。 BLOCK_SIZE 表示这个 crypto unit 被分成多少个 block。传给 Keccak 的 BLOCK_SIZE 是 ISSUE_WIDTH。
     localparam STATE_WARPS = `NUM_WARPS / BLOCK_SIZE;
     localparam STATE_WID_BITS = `CLOG2(STATE_WARPS);
+    // STATE_WID_WIDTH = UP(STATE_WID_BITS) 为了避免位宽为 0 的情况。比如 STATE_WARPS=1 时，CLOG2(1)=0，但 SystemVerilog 里 0 位宽信号不好处理，所以用 UP() 至少给 1 bit。
     localparam STATE_WID_WIDTH = `UP(STATE_WID_BITS);
 
+    // ST_IDLE:
+    //   空闲，可以接收一条新的 Keccak 指令。
+    // ST_PERMUTE:
+    //   正在执行 KECCAK_F1600。
+    //   每个周期做一轮 keccak_round。
+    //   24 轮完成后进入 ST_RESP。
+    // ST_RESP:
+    //   结果已经准备好。
+    //   等 result_if.ready 为 1 后回到 ST_IDLE。
     localparam ST_IDLE    = 2'd0;
     localparam ST_PERMUTE = 2'd1;
     localparam ST_RESP    = 2'd2;
@@ -33,17 +59,18 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
     keccak_state_t perm_state_r;
     keccak_state_t perm_state_n;
 
-    reg [1:0] state_r;
-    reg [4:0] round_ctr_r;
-    reg [NW_WIDTH-1:0] wid_r;
-    reg [META_DATAW-1:0] meta_r;
-    reg [63:0] pending_data_r;
+    reg [1:0] state_r;             // 内部状态机当前状态： ST_IDLE, ST_PERMUTE, ST_RESP
+    reg [4:0] round_ctr_r;         // Keccak-f[1600] 需要 24 轮，所以计数范围是： 0~23，可以用 5 bit 表示
+    reg [NW_WIDTH-1:0] wid_r;      // 保存当前正在处理的 warp id。因为 KECCAK_F1600 是多周期。开始 permutation 的时候 execute_if.data.wid 有效，但 24 周期后 execute_if.data.wid 不一定还是这条指令的 wid。所以在接收指令时保存
+    reg [META_DATAW-1:0] meta_r;   // 保存结果返回需要的元数据。
+    reg [63:0] pending_data_r;     // 当前只有 KECCAK_RD 真正需要返回一个 64-bit Keccak lane 数据
 
-    wire [4:0] lane_idx = execute_if.data.rs2_data[0][4:0];
+    wire [4:0] lane_idx      = execute_if.data.rs2_data[0][4:0]; //25 lanes, rs2 寄存器低 5 bit 表示 lane index
     wire [4:0] read_lane_idx = execute_if.data.rs1_data[0][4:0];
     wire [63:0] lane_data_in = execute_if.data.rs1_data[0];
     wire [63:0] lane_data_out;
 
+    // 这个函数把全局 warp id wid 转成当前 Keccak block 内部的 state_mem 索引。
     function automatic [STATE_WID_WIDTH-1:0] keccak_state_idx(input [NW_WIDTH-1:0] wid);
         begin
             if (BLOCK_SIZE == 1) begin
@@ -189,6 +216,7 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
         end
     endfunction
 
+    // 当前 permutation 状态 perm_state_r 经过第 round_ctr_r 轮 keccak_round 得到下一状态 perm_state_n
     assign perm_state_n = keccak_round(perm_state_r, round_ctr_r);
     assign lane_data_out = keccak_lane_get(state_mem[keccak_state_idx(execute_if.data.wid)], read_lane_idx);
 
@@ -247,6 +275,12 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
                         round_ctr_r <= round_ctr_r + 5'd1;
                     end
                 end
+                // T_RESP 表示结果已经准备好
+                // result_if.valid = 1
+                // 如果下游 result/commit 能接收：
+                // result_if.ready = 1
+                // 那么本模块回到 ST_IDLE，可以接收下一条 Keccak 指令。
+                // 如果下游不 ready，本模块会停在 ST_RESP，保持 result_if.valid=1。
                 ST_RESP: begin
                     if (result_if.ready) begin
                         state_r <= ST_IDLE;
@@ -256,7 +290,9 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
             endcase
         end
     end
-
+    //valid=1 表示发送方有数据，ready=1 表示接收方可以接收
+    // 只有 IDLE 状态可以接收新 execute 请求。
+    // 只有 RESP 状态表示有 result 输出。
     assign execute_if.ready = (state_r == ST_IDLE);
     assign result_if.valid = (state_r == ST_RESP);
     assign {result_if.data.uuid, result_if.data.wid, result_if.data.tmask,
