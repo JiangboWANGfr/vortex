@@ -38,6 +38,7 @@ using namespace vortex;
 #define CMD_MEM_WRITE AFU_IMAGE_CMD_MEM_WRITE
 #define CMD_RUN       AFU_IMAGE_CMD_RUN
 #define CMD_DCR_WRITE AFU_IMAGE_CMD_DCR_WRITE
+#define CMD_RESET     AFU_IMAGE_CMD_RESET
 
 #define STATUS_STATE_BITS 8
 #define CACHE_BLOCK_SHIFT 6
@@ -96,6 +97,9 @@ public:
     vx_scope_stop(this);
 #endif
     if (pcie_ != nullptr) {
+      if (env_u32("DE10PRO_VX_RESET_ON_CLOSE", 1) != 0) {
+        this->reset();
+      }
       api_.PCIE_Close(pcie_);
       pcie_ = nullptr;
     }
@@ -346,6 +350,14 @@ public:
       return err;
     });
     CHECK_ERR(mmio_write32(AFU_IMAGE_MMIO_CMD_TYPE, CMD_RUN), {
+      return err;
+    });
+    mpm_cache_.clear();
+    return 0;
+  }
+
+  int reset() {
+    CHECK_ERR(mmio_write32(AFU_IMAGE_MMIO_CMD_TYPE, CMD_RESET), {
       return err;
     });
     mpm_cache_.clear();

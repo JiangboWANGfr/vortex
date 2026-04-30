@@ -23,7 +23,8 @@
 `define AFU_IMAGE_CMD_MEM_WRITE        2
 `define AFU_IMAGE_CMD_RUN              3
 `define AFU_IMAGE_CMD_DCR_WRITE        4
-`define AFU_IMAGE_CMD_MAX_VALUE        4
+`define AFU_IMAGE_CMD_RESET            5
+`define AFU_IMAGE_CMD_MAX_VALUE        5
 
 `define AFU_IMAGE_MMIO_CMD_TYPE        32'h0000
 `define AFU_IMAGE_MMIO_CMD_ARG0        32'h0008

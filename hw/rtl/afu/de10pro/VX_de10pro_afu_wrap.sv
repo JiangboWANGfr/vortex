@@ -107,9 +107,11 @@ module VX_de10pro_afu_wrap import VX_gpu_pkg::*; #(
     wire vx_busy;
     wire status_read;
     wire run_valid;
+    wire soft_reset_valid;
     wire dcr_wr_valid;
     wire [VX_DCR_ADDR_WIDTH-1:0] dcr_wr_addr;
     wire [VX_DCR_DATA_WIDTH-1:0] dcr_wr_data;
+    wire soft_reset = reset || soft_reset_valid;
 
     wire [COUT_QUEUE_DATAW-1:0] cout_q_dout_s = cout_q_dout[cout_q_id] & {COUT_QUEUE_DATAW{~cout_q_empty[cout_q_id]}};
     wire cout_q_empty_all = &cout_q_empty;
@@ -122,10 +124,10 @@ module VX_de10pro_afu_wrap import VX_gpu_pkg::*; #(
     };
 
     always @(posedge clk) begin
-        if (reset) begin
+        if (soft_reset) begin
             state <= STATE_IDLE;
             vx_reset <= 1;
-            vx_reset_ctr <= '0;
+            vx_reset_ctr <= soft_reset_valid ? RESET_CTR_WIDTH'(`RESET_DELAY - 1) : '0;
             vx_busy_wait <= 0;
         end else begin
             case (state)
@@ -202,7 +204,7 @@ module VX_de10pro_afu_wrap import VX_gpu_pkg::*; #(
             .DEPTH (COUT_QUEUE_SIZE)
         ) cout_queue (
             .clk      (clk),
-            .reset    (reset),
+            .reset    (soft_reset),
             .push     (cout_q_push),
             .pop      (cout_q_pop[i]),
             .data_in  ({cout_tid, cout_char}),
@@ -233,6 +235,7 @@ module VX_de10pro_afu_wrap import VX_gpu_pkg::*; #(
         .isa_caps         (isa_caps),
         .status_read      (status_read),
         .run_valid        (run_valid),
+        .soft_reset_valid (soft_reset_valid),
         .dcr_wr_valid     (dcr_wr_valid),
         .dcr_wr_addr      (dcr_wr_addr),
         .dcr_wr_data      (dcr_wr_data)
@@ -278,7 +281,7 @@ module VX_de10pro_afu_wrap import VX_gpu_pkg::*; #(
         .RSP_OUT_BUF   ((VX_MEM_PORTS > 1 || C_AVS_MEM_NUM_BANKS > 1) ? 2 : 0)
     ) avs_adapter (
         .clk              (clk),
-        .reset            (reset),
+        .reset            (soft_reset),
         .mem_req_valid    (vx_mem_req_valid_qual),
         .mem_req_rw       (vx_mem_req_rw),
         .mem_req_byteen   (vx_mem_req_byteen),

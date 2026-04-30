@@ -34,6 +34,7 @@ module VX_de10pro_afu_ctrl import VX_gpu_pkg::*; #(
     output logic                        status_read,
 
     output logic                        run_valid,
+    output logic                        soft_reset_valid,
     output logic                        dcr_wr_valid,
     output logic [VX_DCR_ADDR_WIDTH-1:0] dcr_wr_addr,
     output logic [VX_DCR_DATA_WIDTH-1:0] dcr_wr_data
@@ -48,6 +49,7 @@ module VX_de10pro_afu_ctrl import VX_gpu_pkg::*; #(
 
     localparam CMD_DCR_WRITE = `AFU_IMAGE_CMD_DCR_WRITE;
     localparam CMD_RUN       = `AFU_IMAGE_CMD_RUN;
+    localparam CMD_RESET     = `AFU_IMAGE_CMD_RESET;
 
     wire [7:0] mmio_addr = avs_address[7:0];
     wire [7:0] mmio_addr_aligned = {mmio_addr[7:3], 3'b000};
@@ -97,6 +99,7 @@ module VX_de10pro_afu_ctrl import VX_gpu_pkg::*; #(
             avs_readdatavalid <= 0;
             status_read <= 0;
             run_valid <= 0;
+            soft_reset_valid <= 0;
             dcr_wr_valid <= 0;
             dcr_wr_addr <= '0;
             dcr_wr_data <= '0;
@@ -105,6 +108,7 @@ module VX_de10pro_afu_ctrl import VX_gpu_pkg::*; #(
             avs_readdata <= read_data_n;
             status_read <= 0;
             run_valid <= 0;
+            soft_reset_valid <= 0;
             dcr_wr_valid <= 0;
 
             if (read_fire && (mmio_addr_aligned == MMIO_STATUS) && ~mmio_hi_word) begin
@@ -146,6 +150,9 @@ module VX_de10pro_afu_ctrl import VX_gpu_pkg::*; #(
                         end
                         CMD_RUN: begin
                             run_valid <= 1;
+                        end
+                        CMD_RESET: begin
+                            soft_reset_valid <= 1;
                         end
                         default: begin
                         end
