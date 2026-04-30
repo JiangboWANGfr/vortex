@@ -3,7 +3,13 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
-ROOT_DIR=$(realpath "$SCRIPT_DIR/..")
+if [[ -f "$SCRIPT_DIR/runner_common.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh"
+else
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh.in"
+fi
 
 show_usage() {
     cat <<EOF
@@ -19,8 +25,9 @@ Options:
   --datasets=<list>                 Comma-separated dataset kinds (default: byte-long)
   --messages=<n>                    Messages per hardware task (default: 1)
   --cases=<n>                       Unique vectors loaded from the dataset file (default: 256)
-  --results=<path>                  TSV output path (default: keccak-bench-results.tsv)
-  --log-dir=<path>                  Run log directory (default: keccak-bench-logs)
+  --output-root=<path>               Output root (default: <build>/runner_output)
+  --results=<path>                  TSV output path (default: <output-root>/keccak_bench/results/<driver>/results.tsv)
+  --log-dir=<path>                  Run log directory (default: <output-root>/keccak_bench/logs/<driver>)
   --startup-addr=<hex>              Kernel startup address (default: XLEN-specific)
   --ext-f-disable                   Build with EXT_F_DISABLE=1
   --ext-d-disable                   Build with EXT_D_DISABLE=1
@@ -39,41 +46,6 @@ Examples:
   $0 --driver=rtlsim --accel-modes=NATIVE --datasets=byte-short --messages=1 --cases=16 --fd-disable
   $0 --driver=de10pro --accel-modes=NATIVE --dispatch=lane --datasets=byte-long,bit-long --messages=2 --cases=256 --fd-disable
 EOF
-}
-
-die() {
-    echo "Error: $*" >&2
-    exit 1
-}
-
-run_cmd() {
-    echo "+ $*"
-    "$@"
-}
-
-format_number() {
-    local value="$1"
-    if [[ -z "$value" ]]; then
-        printf ''
-        return
-    fi
-    printf '%s' "$value" | perl -pe 's/(?<=\d)(?=(?:\d{3})+(?!\d))/,/g'
-}
-
-normalize_number() {
-    local value="$1"
-    printf '%s' "$value" | tr -d ','
-}
-
-join_flags() {
-    local result=()
-    if [[ "$EXT_F_DISABLE" -eq 1 ]]; then
-        result+=("EXT_F_DISABLE=1")
-    fi
-    if [[ "$EXT_D_DISABLE" -eq 1 ]]; then
-        result+=("EXT_D_DISABLE=1")
-    fi
-    printf '%s\n' "${result[@]}"
 }
 
 validate_accel_mode() {
@@ -122,46 +94,23 @@ driver_configs() {
 
 build_driver_runtime() {
     local need_native="$1"
-    case "$DRIVER" in
-        simx|rtlsim)
-            run_cmd make -C "$ROOT_DIR/runtime/stub" clean all
-            local args=("make" "-C" "$ROOT_DIR/runtime/$DRIVER" "clean" "all")
-            while IFS= read -r flag; do
-                [[ -n "$flag" ]] && args+=("$flag")
-            done < <(driver_configs "$need_native")
-            run_cmd env -u DEBUG CCACHE_DISABLE=1 "${args[@]}" "DEBUG=$DEBUG_LEVEL"
-            ;;
-        de10pro)
-            run_cmd make -C "$ROOT_DIR/runtime/stub" clean all
-            local args=("make" "-C" "$ROOT_DIR/runtime/de10pro" "clean" "all")
-            while IFS= read -r flag; do
-                [[ -n "$flag" ]] && args+=("$flag")
-            done < <(driver_configs "$need_native")
-            run_cmd "${args[@]}"
-            export TERASIC_PCIE_SO_PATH="${TERASIC_PCIE_SO_PATH:-$ROOT_DIR/../PCIe_SW_KIT/PCIe_DDR4/32G/terasic_pcie_qsys.so}"
-            export DE10PRO_VX_TIMEOUT_MS="${DE10PRO_VX_TIMEOUT_MS:-5000}"
-            export DE10PRO_VX_VERBOSE_STATUS="${DE10PRO_VX_VERBOSE_STATUS:-1}"
-            export DE10PRO_VX_BAR="${DE10PRO_VX_BAR:-4}"
-            export DE10PRO_VX_MMIO_BASE="${DE10PRO_VX_MMIO_BASE:-0x4001000}"
-            export DE10PRO_VX_STAGING_ADDR="${DE10PRO_VX_STAGING_ADDR:-0x800000000}"
-            export DE10PRO_VX_STAGING_SIZE="${DE10PRO_VX_STAGING_SIZE:-0x200000}"
-            ;;
-        *)
-            die "unsupported driver: $DRIVER"
-            ;;
-    esac
+    local args=()
+    while IFS= read -r flag; do
+        [[ -n "$flag" ]] && args+=("$flag")
+    done < <(driver_configs "$need_native")
+    build_driver_runtime_common "$DRIVER" 5000 "${args[@]}"
 }
 
 extract_field() {
     local pattern="$1"
     local file="$2"
-    grep "^KECCAK_BENCH: .*${pattern}=" "$file" | tail -n 1 | sed -nE "s/.*${pattern}=([0-9,xa-fA-F-]+).*/\\1/p" | tr -d ',' || true
+    grep -a "^KECCAK_BENCH: .*${pattern}=" "$file" | tail -n 1 | sed -nE "s/.*${pattern}=([0-9,xa-fA-F-]+).*/\\1/p" | tr -d ',' || true
 }
 
 extract_perf() {
     local file="$1"
     local line
-    line=$(grep 'PERF: instrs=' "$file" | tail -n 1 || true)
+    line=$(grep -a 'PERF: instrs=' "$file" | tail -n 1 || true)
     if [[ -z "$line" ]]; then
         printf '\t\t'
         return
@@ -169,17 +118,8 @@ extract_perf() {
     printf '%s' "$line" | sed -E 's/.*instrs=([0-9,]+), cycles=([0-9,]+), IPC=([0-9.]+).*/\1\t\2\t\3/' | tr -d ','
 }
 
-format_speedup() {
-    local baseline="$1"
-    local cycles="$2"
-    if [[ -z "$baseline" || -z "$cycles" || "$baseline" == "0" || "$cycles" == "0" ]]; then
-        printf ''
-        return
-    fi
-    perl -e '$r = $ARGV[0] / $ARGV[1]; $s = sprintf("%.2fx", $r); $s =~ s/\.00x$/x/; $s =~ s/(\.\d)0x$/$1x/; print $s;' "$baseline" "$cycles"
-}
-
 main() {
+    RUNNER_NAME="keccak_bench"
     DRIVER="simx"
     DISPATCH="warp"
     STARTUP_ADDR=""
@@ -188,8 +128,9 @@ main() {
     DEBUG_LEVEL=0
     MESSAGES="1"
     CASES="256"
-    RESULTS="keccak-bench-results.tsv"
-    LOG_DIR="keccak-bench-logs"
+    OUTPUT_ROOT="$ROOT_DIR/runner_output"
+    RESULTS=""
+    LOG_DIR=""
     accel_mode_list="NATIVE"
     dataset_list="byte-long"
 
@@ -201,6 +142,7 @@ main() {
             --datasets=*) dataset_list="${1#*=}" ;;
             --messages=*) MESSAGES="${1#*=}" ;;
             --cases=*) CASES="${1#*=}" ;;
+            --output-root=*) OUTPUT_ROOT="${1#*=}" ;;
             --results=*) RESULTS="${1#*=}" ;;
             --log-dir=*) LOG_DIR="${1#*=}" ;;
             --startup-addr=*) STARTUP_ADDR="${1#*=}" ;;
@@ -214,6 +156,7 @@ main() {
         shift
     done
 
+    # Parse and validate command-line options before doing any expensive builds.
     validate_dispatch "$DISPATCH"
     local dispatch_make
     dispatch_make=$(dispatch_make_var "$DISPATCH")
@@ -235,36 +178,47 @@ main() {
         validate_dataset "$dataset"
     done
 
-    XLEN=$(sed -n 's/^XLEN[[:space:]]*?=[[:space:]]*//p' "$ROOT_DIR/config.mk" | head -n1 | tr -d '[:space:]')
-    if [[ -z "$STARTUP_ADDR" ]]; then
-        if [[ "$XLEN" == "64" ]]; then
-            STARTUP_ADDR="0x180000000"
-        else
-            STARTUP_ADDR="0x80000000"
-        fi
-    fi
+    # Resolve build configuration, toolchain paths, and runner output folders.
+    load_xlen
+    set_default_startup_addr
+    source_toolchain_env
+    init_single_driver_output
 
-    if [[ -f "$ROOT_DIR/ci/toolchain_env.sh" ]]; then
-        # shellcheck disable=SC1091
-        source "$ROOT_DIR/ci/toolchain_env.sh"
-    fi
+    echo "ROOT_DIR=$ROOT_DIR"
+    echo "OUTPUT_ROOT=$OUTPUT_ROOT"
+    echo "XLEN=$XLEN"
+    echo "DRIVER=$DRIVER"
+    echo "ACCEL_MODES=${ACCEL_MODES[*]}"
+    echo "DISPATCH=$DISPATCH"
+    echo "DATASETS=${DATASETS[*]}"
+    echo "MESSAGES=$MESSAGES"
+    echo "CASES=$CASES"
+    echo "RESULTS=$RESULTS"
 
-    mkdir -p "$LOG_DIR"
-
+    # Generate hardware config headers, build the common kernel runtime, then
+    # build the selected host/device runtime backend with Keccak native support
+    # when any requested mode needs it.
     run_cmd make -C "$ROOT_DIR/hw" config
-
-    local kernel_args=("make" "-C" "$ROOT_DIR/kernel" "clean" "all")
-    while IFS= read -r flag; do
-        [[ -n "$flag" ]] && kernel_args+=("$flag")
-    done < <(join_flags)
-    run_cmd "${kernel_args[@]}"
-
+    build_kernel
     build_driver_runtime "$need_native"
 
+    # Run each accel-mode/dataset pair, collect logs, and defer TSV emission
+    # until SOFTWARE baselines are known for cycles_speedup calculation.
     local app_dir="$ROOT_DIR/tests/regression/keccak_bench"
     local failures=0
+
+    # rows holds formatted result records in memory. We cannot write rows
+    # immediately because NATIVE rows need the matching SOFTWARE cycle count
+    # to compute cycles_speedup, and SOFTWARE may appear later in ACCEL_MODES.
     local -a rows=()
+
+    # software_cycles maps one comparable workload to its SOFTWARE cycle count.
+    # Key fields are dispatch mode, dataset, driver, messages_per_task, actual
+    # dataset cases, and total messages; this prevents cross-dataset speedups.
     declare -A software_cycles=()
+
+    # Build once per acceleration mode because KECCAK_ACCEL_MODE and dispatch
+    # mode are compile-time choices for the benchmark binary.
     for mode in "${ACCEL_MODES[@]}"; do
         local build_args=("make" "-C" "$app_dir" "clean" "all" "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR" "KECCAK_ACCEL_MODE=$mode" "KECCAK_BENCH_DISPATCH=$dispatch_make")
         while IFS= read -r flag; do
@@ -272,6 +226,8 @@ main() {
         done < <(join_flags)
         run_cmd "${build_args[@]}"
 
+        # Reuse the mode-specific binary for each requested dataset. Each
+        # dataset gets its own log so vector-set failures are easy to isolate.
         for dataset in "${DATASETS[@]}"; do
             local log_file="$LOG_DIR/keccak-bench-${mode}-${DISPATCH}-${dataset}-${DRIVER}.log"
             local status
@@ -282,6 +238,9 @@ main() {
                 failures=$((failures + 1))
             fi
 
+            # Pull benchmark dimensions, checksum, and performance summary out
+            # of the log. actual_cases can differ from requested CASES when a
+            # dataset contains fewer vectors, so use it in the comparison key.
             local actual_cases total_messages total_bits digest_checksum perf instrs cycles ipc row_key
             actual_cases=$(extract_field "dataset_cases" "$log_file")
             total_messages=$(extract_field "total_messages" "$log_file")
@@ -293,20 +252,35 @@ main() {
             if [[ "$mode" == "SOFTWARE" && -n "$cycles" ]]; then
                 software_cycles["$row_key"]="$cycles"
             fi
+
+            # Store the display-ready fields plus the raw comparison key. The
+            # key is not written to the TSV; it is only used below to find the
+            # matching SOFTWARE baseline for cycles_speedup.
             rows+=("keccak"$'\t'"$mode"$'\t'"$DISPATCH"$'\t'"$dataset"$'\t'"$DRIVER"$'\t'"$(format_number "$MESSAGES")"$'\t'"$(format_number "${actual_cases:-$CASES}")"$'\t'"$(format_number "$total_messages")"$'\t'"$(format_number "$total_bits")"$'\t'"$digest_checksum"$'\t'"$instrs"$'\t'"$cycles"$'\t'"$ipc"$'\t'"$status"$'\t'"$log_file"$'\t'"$row_key")
         done
     done
 
+    # Emit the final TSV only after all runs have completed. This makes speedup
+    # stable regardless of ACCEL_MODES order and keeps partial rows out of the
+    # result file until each row has all derived fields.
     printf 'algo\taccel_mode\tdispatch_mode\tdataset\tdriver\tmessages_per_task\tdataset_cases\ttotal_messages\ttotal_bits\tdigest_checksum\tinstrs\tcycles\tcycles_speedup\tipc\tstatus\tlog\n' > "$RESULTS"
     local row
     for row in "${rows[@]}"; do
         IFS=$'\t' read -r algo mode dispatch dataset driver messages actual_cases total_messages total_bits digest_checksum instrs cycles ipc status log_file row_key <<< "$row"
         local speedup=""
+
+        # cycles_speedup is defined as SOFTWARE cycles divided by this row's
+        # cycles for the same dispatch/dataset/backend. SOFTWARE is the
+        # baseline and reports 1x. If no matching SOFTWARE row was requested,
+        # leave the field empty rather than inventing a comparison.
         if [[ "$mode" == "SOFTWARE" && -n "$cycles" ]]; then
             speedup="1x"
-        elif [[ -n "${software_cycles[$row_key]:-}" && -n "$cycles" ]]; then
+        elif [[ -n "$row_key" && -n "${software_cycles[$row_key]:-}" && -n "$cycles" ]]; then
             speedup=$(format_speedup "${software_cycles[$row_key]}" "$cycles")
         fi
+
+        # Write one tab-separated row. Logs are per dataset/mode/backend, which
+        # keeps checksum mismatches and performance regressions easy to trace.
         printf 'keccak\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$mode" "$dispatch" "$dataset" "$driver" \
             "$messages" "$actual_cases" "$total_messages" "$total_bits" "$digest_checksum" \

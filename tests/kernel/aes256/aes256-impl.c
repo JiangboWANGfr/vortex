@@ -136,9 +136,9 @@ void aes256_key_exp(const uint32_t *key, uint32_t *round_keys, int inv_mix_cols)
 
         __intrin_unpack_cols(next01, &round_keys[i + 0], &round_keys[i + 1]);
         __intrin_unpack_cols(next23, &round_keys[i + 2], &round_keys[i + 3]);
-        if (vx_hart_id() == 0) {
-          vx_printf("AES256_BENCH: generated round keys %d-%d\n", i, i + 3);
-        }
+        // if (vx_hart_id() == 0) {
+        //   vx_printf("AES256_BENCH: generated round keys %d-%d\n", i, i + 3);
+        // }
         if (i + 4 >= nwords) {
             break;
         }

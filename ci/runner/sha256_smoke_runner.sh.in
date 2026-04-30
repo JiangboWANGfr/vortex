@@ -3,7 +3,13 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
-ROOT_DIR=$(realpath "$SCRIPT_DIR/..")
+if [[ -f "$SCRIPT_DIR/runner_common.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh"
+else
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh.in"
+fi
 
 show_usage() {
     cat <<EOF
@@ -15,8 +21,9 @@ Usage:
 Options:
   --drivers=<list>                  Comma-separated backends (default: simx,rtlsim)
   --accel-modes=<list>              Comma-separated modes (default: NATIVE,SOFTWARE)
-  --results=<path>                  TSV output path (default: sha256-smoke-results.tsv)
-  --log-dir=<path>                  Run log directory (default: sha256-smoke-logs)
+  --output-root=<path>               Output root (default: <build>/runner_output)
+  --results=<path>                  Aggregate TSV output path (default: <output-root>/sha256_smoke/results/all/results.tsv)
+  --log-dir=<path>                  Run log root (default: <output-root>/sha256_smoke/logs)
   --startup-addr=<hex>              Kernel startup address (default: XLEN-specific)
   --ext-f-disable                   Build with EXT_F_DISABLE=1
   --ext-d-disable                   Build with EXT_D_DISABLE=1
@@ -38,37 +45,6 @@ Example:
 EOF
 }
 
-die() {
-    echo "Error: $*" >&2
-    exit 1
-}
-
-run_cmd() {
-    echo "+ $*"
-    "$@"
-}
-
-join_flags() {
-    local result=()
-    if [[ "$EXT_F_DISABLE" -eq 1 ]]; then
-        result+=("EXT_F_DISABLE=1")
-    fi
-    if [[ "$EXT_D_DISABLE" -eq 1 ]]; then
-        result+=("EXT_D_DISABLE=1")
-    fi
-    printf '%s\n' "${result[@]}"
-}
-
-validate_driver() {
-    case "$1" in
-        simx|rtlsim)
-            ;;
-        *)
-            die "unsupported driver: $1; supported: simx rtlsim"
-            ;;
-    esac
-}
-
 validate_accel_mode() {
     case "$1" in
         NATIVE|SOFTWARE)
@@ -79,29 +55,22 @@ validate_accel_mode() {
     esac
 }
 
-build_sim() {
-    case "$1" in
-        simx)
-            run_cmd env CCACHE_DISABLE=1 make -C "$ROOT_DIR/sim/simx" clean all "DEBUG=$DEBUG_LEVEL"
-            ;;
-        rtlsim)
-            run_cmd env CCACHE_DISABLE=1 make -C "$ROOT_DIR/sim/rtlsim" clean all "DEBUG=$DEBUG_LEVEL"
-            ;;
-        *)
-            die "unsupported driver: $1"
-            ;;
-    esac
+build_driver_runtime() {
+    local driver="$1"
+    build_driver_runtime_common "$driver" 5000
 }
 
 main() {
+    RUNNER_NAME="sha256_smoke"
     DRIVER_LIST="simx,rtlsim"
     ACCEL_MODE_LIST="NATIVE,SOFTWARE"
     STARTUP_ADDR=""
     EXT_F_DISABLE=0
     EXT_D_DISABLE=0
     DEBUG_LEVEL=0
-    RESULTS="sha256-smoke-results.tsv"
-    LOG_DIR="sha256-smoke-logs"
+    OUTPUT_ROOT="$ROOT_DIR/runner_output"
+    RESULTS=""
+    LOG_DIR=""
     INCLUDE_RTLSIM_NATIVE=0
 
     while [[ $# -gt 0 ]]; do
@@ -111,6 +80,9 @@ main() {
                 ;;
             --accel-modes=*)
                 ACCEL_MODE_LIST="${1#*=}"
+                ;;
+            --output-root=*)
+                OUTPUT_ROOT="${1#*=}"
                 ;;
             --results=*)
                 RESULTS="${1#*=}"
@@ -148,6 +120,7 @@ main() {
         shift
     done
 
+    # Parse and validate command-line options before doing any expensive builds.
     IFS=',' read -r -a DRIVERS <<< "$DRIVER_LIST"
     IFS=',' read -r -a ACCEL_MODES <<< "$ACCEL_MODE_LIST"
 
@@ -161,60 +134,54 @@ main() {
         validate_accel_mode "$mode"
     done
 
-    if [[ ! -f "$ROOT_DIR/config.mk" ]]; then
-        die "config.mk not found under $ROOT_DIR"
-    fi
-
-    XLEN=$(sed -n 's/^XLEN[[:space:]]*?=[[:space:]]*//p' "$ROOT_DIR/config.mk" | head -n1 | tr -d '[:space:]')
-    if [[ -z "$XLEN" ]]; then
-        die "failed to determine XLEN from $ROOT_DIR/config.mk"
-    fi
-    if [[ -z "$STARTUP_ADDR" ]]; then
-        if [[ "$XLEN" == "64" ]]; then
-            STARTUP_ADDR="0x180000000"
-        else
-            STARTUP_ADDR="0x80000000"
-        fi
-    fi
-
-    if [[ -f "$ROOT_DIR/ci/toolchain_env.sh" ]]; then
-        # shellcheck disable=SC1091
-        source "$ROOT_DIR/ci/toolchain_env.sh"
-    fi
-
-    mkdir -p "$LOG_DIR"
+    # Resolve build configuration, toolchain paths, and runner output folders.
+    load_xlen
+    set_default_startup_addr
+    source_toolchain_env
+    init_multi_driver_output
+    local run_output_dir="$OUTPUT_ROOT/$RUNNER_NAME"
 
     echo "ROOT_DIR=$ROOT_DIR"
+    echo "OUTPUT_ROOT=$OUTPUT_ROOT"
     echo "XLEN=$XLEN"
     echo "DRIVERS=${DRIVERS[*]}"
     echo "ACCEL_MODES=${ACCEL_MODES[*]}"
     echo "RESULTS=$RESULTS"
 
+    # Generate hardware config headers, build the common kernel runtime, then
+    # build every requested host/device runtime backend.
     run_cmd make -C "$ROOT_DIR/hw" config
-
-    local kernel_args=("make" "-C" "$ROOT_DIR/kernel" "clean" "all")
-    while IFS= read -r flag; do
-        [[ -n "$flag" ]] && kernel_args+=("$flag")
-    done < <(join_flags)
-    run_cmd "${kernel_args[@]}"
-
+    build_kernel
     for driver in "${DRIVERS[@]}"; do
-        build_sim "$driver"
+        build_driver_runtime "$driver"
     done
 
+    # Prepare aggregate and per-driver TSVs before running the smoke matrix.
     printf 'algo\taccel_mode\tdriver\tstatus\tlog\n' > "$RESULTS"
+    for driver in "${DRIVERS[@]}"; do
+        # Per-driver result files make it easy to archive or compare one backend
+        # without filtering the aggregate TSV by hand.
+        mkdir -p "$LOG_DIR/$driver" "$run_output_dir/results/$driver"
+        printf 'algo\taccel_mode\tdriver\tstatus\tlog\n' > "$run_output_dir/results/$driver/results.tsv"
+    done
 
+    # Run each accel-mode/driver pair and append both aggregate and per-driver
+    # rows so single-driver and whole-matrix views stay in sync.
     local app_dir="$ROOT_DIR/tests/kernel/sha256"
     local failures=0
     for mode in "${ACCEL_MODES[@]}"; do
+        # SHA_ACCEL_MODE changes compile-time selection between native SHA
+        # instructions and the software implementation, so rebuild per mode.
         local build_args=("make" "-C" "$app_dir" "clean" "all" "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR" "SHA_ACCEL_MODE=$mode")
         while IFS= read -r flag; do
             [[ -n "$flag" ]] && build_args+=("$flag")
         done < <(join_flags)
         run_cmd "${build_args[@]}"
 
+        # Run the same mode-specific binary on each requested backend. Logs are
+        # grouped by driver to mirror the result directory layout.
         for driver in "${DRIVERS[@]}"; do
-            local log_file="$LOG_DIR/sha256-${mode}-${driver}.log"
+            local log_file="$LOG_DIR/$driver/sha256-${mode}-${driver}.log"
             local status
             echo
             echo "== Running sha256 mode=$mode on $driver =="
@@ -224,7 +191,11 @@ main() {
                 status="fail"
                 failures=$((failures + 1))
             fi
+
+            # Append to both TSV views: the aggregate file for the full matrix
+            # and the per-driver file for backend-specific summaries.
             printf 'sha256\t%s\t%s\t%s\t%s\n' "$mode" "$driver" "$status" "$log_file" >> "$RESULTS"
+            printf 'sha256\t%s\t%s\t%s\t%s\n' "$mode" "$driver" "$status" "$log_file" >> "$run_output_dir/results/$driver/results.tsv"
         done
     done
 

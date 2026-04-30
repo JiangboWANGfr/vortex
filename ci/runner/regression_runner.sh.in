@@ -17,7 +17,13 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
-ROOT_DIR=$(realpath "$SCRIPT_DIR/..")
+if [[ -f "$SCRIPT_DIR/runner_common.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh"
+else
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh.in"
+fi
 
 show_usage() {
     cat <<EOF
@@ -30,6 +36,9 @@ Options:
   --driver=<simx|rtlsim|de10pro>    Backend driver (default: simx)
   --apps=<list|all>                 Comma-separated app list (default: all)
   --opts=<args>                     Override runtime args for every app
+  --output-root=<path>               Output root (default: <build>/runner_output)
+  --results=<path>                  TSV output path (default: <output-root>/regression/results/<driver>/results.tsv)
+  --log-dir=<path>                  Run log directory (default: <output-root>/regression/logs/<driver>)
   --startup-addr=<hex>              Kernel startup address (default: 0x80000000)
   --ext-f-disable                   Build with EXT_F_DISABLE=1
   --ext-d-disable                   Build with EXT_D_DISABLE=1
@@ -38,38 +47,20 @@ Options:
   --help                            Show this help
 
 Supported apps:
-  basic, demo, aes_smoke, aes256, aes256_bench
+  basic, basic_diag, demo, dogfood, dropout, dotproduct, mstress,
+  io_addr, printf, diverge, sort, fence, vecadd, sgemm, conv3,
+  relu, sgemv, sgemm2, madmax, stencil3d
 
 Notes:
-  --apps=all intentionally excludes aes256_bench. Use --apps=aes256_bench
-  for a small spot check, or ci/crypto_exp_runner.sh for TSV experiments.
+  Crypto apps are intentionally excluded from this generic runner. Use the
+  AES/SHA/Keccak runner scripts under ci/runner for crypto smoke and benchmark
+  tests with structured TSV output.
 
 Examples:
   $0 --driver=simx --apps=all --fd-disable
   $0 --driver=de10pro --apps=basic,demo --fd-disable
-  $0 --driver=rtlsim --apps=aes_smoke --fd-disable --debug=3
+  $0 --driver=rtlsim --apps=basic_diag,vecadd --fd-disable --debug=3
 EOF
-}
-
-die() {
-    echo "Error: $*" >&2
-    exit 1
-}
-
-run_cmd() {
-    echo "+ $*"
-    "$@"
-}
-
-join_flags() {
-    local result=()
-    if [[ "$EXT_F_DISABLE" -eq 1 ]]; then
-        result+=("EXT_F_DISABLE=1")
-    fi
-    if [[ "$EXT_D_DISABLE" -eq 1 ]]; then
-        result+=("EXT_D_DISABLE=1")
-    fi
-    printf '%s\n' "${result[@]}"
 }
 
 default_app_opts() {
@@ -80,11 +71,8 @@ default_app_opts() {
         demo)
             echo "-n1"
             ;;
-        aes_smoke|aes256)
+        basic_diag|dogfood|dropout|dotproduct|mstress|io_addr|printf|diverge|sort|fence|vecadd|sgemm|conv3|relu|sgemv|sgemm2|madmax|stencil3d)
             echo ""
-            ;;
-        aes256_bench)
-            echo "-n16 -t4"
             ;;
         *)
             die "unsupported app: $1"
@@ -96,7 +84,7 @@ validate_apps() {
     local app
     for app in "${APPS[@]}"; do
         case "$app" in
-            basic|demo|aes_smoke|aes256|aes256_bench)
+            basic|basic_diag|demo|dogfood|dropout|dotproduct|mstress|io_addr|printf|diverge|sort|fence|vecadd|sgemm|conv3|relu|sgemv|sgemm2|madmax|stencil3d)
                 ;;
             *)
                 die "unsupported app: $app"
@@ -106,39 +94,20 @@ validate_apps() {
 }
 
 build_driver_runtime() {
-    case "$DRIVER" in
-        simx)
-            run_cmd make -C "$ROOT_DIR/runtime/stub" clean all
-            run_cmd env CCACHE_DISABLE=1 make -C "$ROOT_DIR/runtime/simx" clean all "DEBUG=$DEBUG_LEVEL"
-            ;;
-        rtlsim)
-            run_cmd make -C "$ROOT_DIR/runtime/stub" clean all
-            run_cmd make -C "$ROOT_DIR/runtime/rtlsim" clean all "DEBUG=$DEBUG_LEVEL"
-            ;;
-        de10pro)
-            run_cmd make -C "$ROOT_DIR/runtime/stub" clean all
-            run_cmd make -C "$ROOT_DIR/runtime/de10pro" clean all
-            export TERASIC_PCIE_SO_PATH="${TERASIC_PCIE_SO_PATH:-$ROOT_DIR/../PCIe_SW_KIT/PCIe_DDR4/32G/terasic_pcie_qsys.so}"
-            export DE10PRO_VX_TIMEOUT_MS="${DE10PRO_VX_TIMEOUT_MS:-5000}"
-            export DE10PRO_VX_VERBOSE_STATUS="${DE10PRO_VX_VERBOSE_STATUS:-1}"
-            export DE10PRO_VX_BAR="${DE10PRO_VX_BAR:-4}"
-            export DE10PRO_VX_MMIO_BASE="${DE10PRO_VX_MMIO_BASE:-0x4001000}"
-            export DE10PRO_VX_STAGING_ADDR="${DE10PRO_VX_STAGING_ADDR:-0x800000000}"
-            export DE10PRO_VX_STAGING_SIZE="${DE10PRO_VX_STAGING_SIZE:-0x200000}"
-            ;;
-        *)
-            die "unsupported driver: $DRIVER"
-            ;;
-    esac
+    build_driver_runtime_common "$DRIVER" 5000
 }
 
 main() {
+    RUNNER_NAME="regression"
     DRIVER="simx"
     STARTUP_ADDR="0x80000000"
     EXT_F_DISABLE=0
     EXT_D_DISABLE=0
     DEBUG_LEVEL=0
     OPTS_OVERRIDE=""
+    OUTPUT_ROOT="$ROOT_DIR/runner_output"
+    RESULTS=""
+    LOG_DIR=""
 
     local app_list="all"
     while [[ $# -gt 0 ]]; do
@@ -151,6 +120,15 @@ main() {
                 ;;
             --opts=*)
                 OPTS_OVERRIDE="${1#*=}"
+                ;;
+            --output-root=*)
+                OUTPUT_ROOT="${1#*=}"
+                ;;
+            --results=*)
+                RESULTS="${1#*=}"
+                ;;
+            --log-dir=*)
+                LOG_DIR="${1#*=}"
                 ;;
             --startup-addr=*)
                 STARTUP_ADDR="${1#*=}"
@@ -180,43 +158,31 @@ main() {
     done
 
     if [[ "$app_list" == "all" ]]; then
-        APPS=(basic demo aes_smoke aes256)
+        APPS=(basic basic_diag demo dogfood dropout dotproduct mstress io_addr printf diverge sort fence vecadd sgemm conv3 relu sgemv sgemm2 madmax stencil3d)
     else
         IFS=',' read -r -a APPS <<< "$app_list"
     fi
     validate_apps
 
-    if [[ ! -f "$ROOT_DIR/config.mk" ]]; then
-        die "config.mk not found under $ROOT_DIR"
-    fi
-
-    XLEN=$(sed -n 's/^XLEN[[:space:]]*?=[[:space:]]*//p' "$ROOT_DIR/config.mk" | head -n1 | tr -d '[:space:]')
-    if [[ -z "$XLEN" ]]; then
-        die "failed to determine XLEN from $ROOT_DIR/config.mk"
-    fi
-
-    if [[ -f "$ROOT_DIR/ci/toolchain_env.sh" ]]; then
-        # shellcheck disable=SC1091
-        source "$ROOT_DIR/ci/toolchain_env.sh"
-    fi
+    load_xlen
+    source_toolchain_env
+    init_single_driver_output
 
     echo "ROOT_DIR=$ROOT_DIR"
+    echo "OUTPUT_ROOT=$OUTPUT_ROOT"
     echo "XLEN=$XLEN"
     echo "DRIVER=$DRIVER"
     echo "APPS=${APPS[*]}"
     echo "STARTUP_ADDR=$STARTUP_ADDR"
     echo "EXT_F_DISABLE=$EXT_F_DISABLE"
     echo "EXT_D_DISABLE=$EXT_D_DISABLE"
+    echo "RESULTS=$RESULTS"
 
     run_cmd make -C "$ROOT_DIR/hw" config
-
-    local kernel_args=("make" "-C" "$ROOT_DIR/kernel" "clean" "all")
-    while IFS= read -r flag; do
-        [[ -n "$flag" ]] && kernel_args+=("$flag")
-    done < <(join_flags)
-    run_cmd "${kernel_args[@]}"
-
+    build_kernel
     build_driver_runtime
+
+    printf 'app\tdriver\tstatus\tlog\n' > "$RESULTS"
 
     local failures=0
     local app
@@ -240,20 +206,24 @@ main() {
             run_args+=("OPTS=$app_opts")
         fi
 
+        local log_file="$LOG_DIR/${app}-${DRIVER}.log"
         echo
         echo "== Running $app on $DRIVER =="
-        if ! "${run_args[@]}"; then
+        if "${run_args[@]}" 2>&1 | tee "$log_file"; then
+            printf '%s\t%s\tok\t%s\n' "$app" "$DRIVER" "$log_file" >> "$RESULTS"
+        else
             failures=$((failures + 1))
+            printf '%s\t%s\tfail\t%s\n' "$app" "$DRIVER" "$log_file" >> "$RESULTS"
             echo "FAILED: $app on $DRIVER" >&2
         fi
         echo
     done
 
     if [[ $failures -ne 0 ]]; then
-        die "$failures app(s) failed"
+        die "$failures app(s) failed; partial results are in $RESULTS"
     fi
 
-    echo "All requested apps passed on $DRIVER"
+    echo "All requested apps passed on $DRIVER; results written to $RESULTS"
 }
 
 main "$@"
