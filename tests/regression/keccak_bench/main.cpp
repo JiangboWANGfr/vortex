@@ -118,6 +118,10 @@ static uint64_t ceil_div_u64(uint64_t value, uint64_t divisor) {
   return (value + divisor - 1) / divisor;
 }
 
+static uint64_t round_up_u64(uint64_t value, uint64_t alignment) {
+  return ceil_div_u64(value, alignment) * alignment;
+}
+
 static const char* dispatch_mode_name() {
 #ifdef KECCAK_BENCH_DISPATCH_WARP
   return "warp";
@@ -131,15 +135,18 @@ static uint64_t compute_num_tasks(uint64_t num_cores,
                                   uint64_t num_threads,
                                   uint64_t dataset_size,
                                   uint32_t messages_per_task) {
+  if (num_cores == 0) {
+    return 0;
+  }
 #ifdef KECCAK_BENCH_DISPATCH_WARP
   (void)num_threads;
   uint64_t warp_slots = num_cores * num_warps;
   uint64_t dataset_warps = ceil_div_u64(dataset_size, messages_per_task);
-  return std::max<uint64_t>(warp_slots, dataset_warps);
+  return round_up_u64(std::max<uint64_t>(warp_slots, dataset_warps), num_cores);
 #else
   uint64_t lane_slots = num_cores * num_warps * num_threads;
   uint64_t lane_tasks = std::max<uint64_t>(lane_slots, ceil_div_u64(dataset_size, messages_per_task));
-  return lane_tasks;
+  return round_up_u64(lane_tasks, num_cores);
 #endif
 }
 

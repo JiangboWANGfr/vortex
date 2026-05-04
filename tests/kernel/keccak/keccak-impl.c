@@ -253,8 +253,10 @@ void keccak_bits(unsigned int rate,
         uint16_t suffix = (uint16_t)delimited_suffix << rem_bits;
         // 把 suffix 的低 8 bit XOR 到当前 byte。
         state_bytes[block_size] ^= (uint8_t)(suffix & 0xffU);
-        // suffix 的最高位已经占用了当前 block 的最后一个 byte 的 bit7。并且当前 byte 刚好是 rate block 的最后一个 byte,可是后面还要添加最终 padding,为了避免两个 padding 规则冲突，这里先执行一次 permutation，开始一个新的 block
-        if (((suffix & 0x80U) != 0U) && (block_size == (rate_in_bytes - 1U))) {
+        // 如果 suffix 已经占用当前 block 的最后一 bit，或者溢出到了下一 byte，
+        // 并且当前 byte 是 rate block 的最后一个 byte，需要先开始一个新 block。
+        if ((((suffix & 0x80U) != 0U) || ((suffix >> 8) != 0U)) &&
+            (block_size == (rate_in_bytes - 1U))) {
             keccak_f1600_permute(state);
         }
         if ((suffix >> 8) != 0U) {
