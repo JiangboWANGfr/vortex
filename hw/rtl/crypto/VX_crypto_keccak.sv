@@ -64,11 +64,34 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
     reg [NW_WIDTH-1:0] wid_r;      // 保存当前正在处理的 warp id。因为 KECCAK_F1600 是多周期。开始 permutation 的时候 execute_if.data.wid 有效，但 24 周期后 execute_if.data.wid 不一定还是这条指令的 wid。所以在接收指令时保存
     reg [META_DATAW-1:0] meta_r;   // 保存结果返回需要的元数据。
     reg [63:0] pending_data_r;     // 当前只有 KECCAK_RD 真正需要返回一个 64-bit Keccak lane 数据
+`ifdef XLEN_32
+    `UNUSED_VAR(pending_data_r[63:32])
+`endif
 
     wire [4:0] lane_idx      = execute_if.data.rs2_data[0][4:0]; //25 lanes, rs2 寄存器低 5 bit 表示 lane index
     wire [4:0] read_lane_idx = execute_if.data.rs1_data[0][4:0];
-    wire [63:0] lane_data_in = execute_if.data.rs1_data[0];
+    wire [63:0] lane_data_cur;
     wire [63:0] lane_data_out;
+    wire [63:0] lane_data_wr;
+    wire [63:0] lane_data_xor;
+    wire [63:0] read_data_out;
+
+`ifdef XLEN_64
+    assign lane_data_wr  = execute_if.data.rs1_data[0];
+    assign lane_data_xor = execute_if.data.rs1_data[0];
+    assign read_data_out = lane_data_out;
+`else
+    wire write_hi_word = execute_if.data.rs2_data[0][5];
+    wire read_hi_word  = execute_if.data.rs1_data[0][5];
+    wire [31:0] lane_word_in = execute_if.data.rs1_data[0][31:0];
+
+    assign lane_data_wr  = write_hi_word ? {lane_word_in, lane_data_cur[31:0]}
+                                         : {lane_data_cur[63:32], lane_word_in};
+    assign lane_data_xor = write_hi_word ? {lane_word_in, 32'b0}
+                                         : {32'b0, lane_word_in};
+    assign read_data_out = read_hi_word ? {32'b0, lane_data_out[63:32]}
+                                        : {32'b0, lane_data_out[31:0]};
+`endif
 
     // 这个函数把全局 warp id wid 转成当前 Keccak block 内部的 state_mem 索引。
     function automatic [STATE_WID_WIDTH-1:0] keccak_state_idx(input [NW_WIDTH-1:0] wid);
@@ -218,6 +241,7 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
 
     // 当前 permutation 状态 perm_state_r 经过第 round_ctr_r 轮 keccak_round 得到下一状态 perm_state_n
     assign perm_state_n = keccak_round(perm_state_r, round_ctr_r);
+    assign lane_data_cur = keccak_lane_get(state_mem[keccak_state_idx(execute_if.data.wid)], lane_idx);
     assign lane_data_out = keccak_lane_get(state_mem[keccak_state_idx(execute_if.data.wid)], read_lane_idx);
 
     wire execute_fire = (state_r == ST_IDLE) && execute_if.valid;
@@ -248,13 +272,13 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
                         wid_r <= execute_if.data.wid;
                         pending_data_r <= '0;
                         if (do_write) begin
-                            state_mem[keccak_state_idx(execute_if.data.wid)] <= keccak_lane_set(state_mem[keccak_state_idx(execute_if.data.wid)], lane_idx, lane_data_in, 1'b0);
+                            state_mem[keccak_state_idx(execute_if.data.wid)] <= keccak_lane_set(state_mem[keccak_state_idx(execute_if.data.wid)], lane_idx, lane_data_wr, 1'b0);
                             state_r <= ST_RESP;
                         end else if (do_xor) begin
-                            state_mem[keccak_state_idx(execute_if.data.wid)] <= keccak_lane_set(state_mem[keccak_state_idx(execute_if.data.wid)], lane_idx, lane_data_in, 1'b1);
+                            state_mem[keccak_state_idx(execute_if.data.wid)] <= keccak_lane_set(state_mem[keccak_state_idx(execute_if.data.wid)], lane_idx, lane_data_xor, 1'b1);
                             state_r <= ST_RESP;
                         end else if (do_read) begin
-                            pending_data_r <= lane_data_out;
+                            pending_data_r <= read_data_out;
                             state_r <= ST_RESP;
                         end else if (do_perm) begin
                             perm_state_r <= state_mem[keccak_state_idx(execute_if.data.wid)];

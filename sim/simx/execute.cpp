@@ -1038,21 +1038,50 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
       switch (keccak_type) {
       case KeccakType::WR: {
         auto lane_idx = rs2_data[0].u32 & 0x1f;
+        #if (XLEN == 32)
+        if (rs2_data[0].u32 & 0x20) {
+          keccak_state.at(lane_idx) =
+              (keccak_state.at(lane_idx) & 0x00000000ffffffffull)
+              | (uint64_t(rs1_data[0].u32) << 32);
+        } else {
+          keccak_state.at(lane_idx) =
+              (keccak_state.at(lane_idx) & 0xffffffff00000000ull)
+              | uint64_t(rs1_data[0].u32);
+        }
+        #else
         keccak_state.at(lane_idx) = rs1_data[0].u64;
+        #endif
         rd_write = false;
       } break;
       case KeccakType::XOR: {
         auto lane_idx = rs2_data[0].u32 & 0x1f;
+        #if (XLEN == 32)
+        if (rs2_data[0].u32 & 0x20) {
+          keccak_state.at(lane_idx) ^= uint64_t(rs1_data[0].u32) << 32;
+        } else {
+          keccak_state.at(lane_idx) ^= uint64_t(rs1_data[0].u32);
+        }
+        #else
         keccak_state.at(lane_idx) ^= rs1_data[0].u64;
+        #endif
         rd_write = false;
       } break;
       case KeccakType::RD: {
         auto lane_idx = rs1_data[0].u32 & 0x1f;
         auto value = keccak_state.at(lane_idx);
+        #if (XLEN == 32)
+        if (rs1_data[0].u32 & 0x20) {
+          value >>= 32;
+        }
+        #endif
         for (uint32_t t = thread_start; t < num_threads; ++t) {
           if (!warp.tmask.test(t))
             continue;
+          #if (XLEN == 32)
+          rd_data[t].u = Word(value);
+          #else
           rd_data[t].u64 = value;
+          #endif
         }
         rd_write = true;
       } break;
