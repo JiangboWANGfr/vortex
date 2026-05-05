@@ -53,6 +53,63 @@ static uint8_t low_bits_mask(uint32_t n_bits) {
 }
 
 #ifdef KECCAK_NATIVE
+static uint64_t load64_le(const uint8_t *src) {
+    uint64_t value = 0;
+    for (uint32_t i = 0; i < 8; ++i) {
+        value |= (uint64_t)src[i] << (8U * i);
+    }
+    return value;
+}
+
+static uint64_t load64_le_partial(const uint8_t *src, uint32_t n) {
+    uint64_t value = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        value |= (uint64_t)src[i] << (8U * i);
+    }
+    return value;
+}
+
+static void keccak_xor_byte(uint32_t byte_idx, uint8_t value) {
+    uint32_t lane = byte_idx >> 3;
+    uint32_t shift = (byte_idx & 7U) * 8U;
+    __intrin_keccak_xor_lane((uint64_t)value << shift, lane);
+}
+
+static void keccak_native_zero_state(void) {
+    for (uint32_t i = 0; i < KECCAK_STATE_LANES; ++i) {
+        __intrin_keccak_write_lane(0, i);
+    }
+}
+
+static void keccak_native_absorb_bytes(const uint8_t *input, uint32_t n) {
+    uint32_t lane = 0;
+    while (n >= 8U) {
+        __intrin_keccak_xor_lane(load64_le(input), lane);
+        input += 8;
+        n -= 8;
+        ++lane;
+    }
+    if (n != 0U) {
+        __intrin_keccak_xor_lane(load64_le_partial(input, n), lane);
+    }
+}
+
+static void keccak_native_squeeze_bytes(uint8_t *output, uint32_t n) {
+    uint32_t lane = 0;
+    while (n != 0U) {
+        uint64_t value = __intrin_keccak_read_lane(lane);
+        uint32_t chunk = n < 8U ? n : 8U;
+        for (uint32_t i = 0; i < chunk; ++i) {
+            output[i] = (uint8_t)(value >> (8U * i));
+        }
+        output += chunk;
+        n -= chunk;
+        ++lane;
+    }
+}
+#endif
+
+#ifdef KECCAK_NATIVE
 static void keccak_f1600_permute(uint64_t *s) {
     for (uint32_t i = 0; i < KECCAK_STATE_LANES; ++i) {
         __intrin_keccak_write_lane(s[i], i);
@@ -201,6 +258,66 @@ void keccak_bits(unsigned int rate,
                  uint8_t delimited_suffix,
                  uint8_t *output,
                  uint64_t output_byte_len) {
+#ifdef KECCAK_NATIVE
+    unsigned int rate_in_bytes = rate / 8U;
+    uint64_t input_byte_len = input_bit_len / 8U;
+    uint32_t rem_bits = (uint32_t)(input_bit_len & 7U);
+    unsigned int block_size = 0;
+
+    if (((rate + capacity) != 1600U) || ((rate % 8U) != 0U)) {
+        return;
+    }
+
+    keccak_native_zero_state();
+
+    while (input_byte_len >= rate_in_bytes) {
+        keccak_native_absorb_bytes(input, rate_in_bytes);
+        input += rate_in_bytes;
+        input_byte_len -= rate_in_bytes;
+        __intrin_keccak_f1600();
+    }
+
+    block_size = (unsigned int)input_byte_len;
+    if (input_byte_len != 0U) {
+        keccak_native_absorb_bytes(input, block_size);
+        input += input_byte_len;
+    }
+
+    if (rem_bits != 0U) {
+        keccak_xor_byte(block_size, input[0] & low_bits_mask(rem_bits));
+    }
+
+    {
+        uint16_t suffix = (uint16_t)delimited_suffix << rem_bits;
+        keccak_xor_byte(block_size, (uint8_t)(suffix & 0xffU));
+        if ((((suffix & 0x80U) != 0U) || ((suffix >> 8) != 0U)) &&
+            (block_size == (rate_in_bytes - 1U))) {
+            __intrin_keccak_f1600();
+        }
+        if ((suffix >> 8) != 0U) {
+            uint32_t suffix_idx = (block_size == (rate_in_bytes - 1U))
+                                ? 0U
+                                : (block_size + 1U);
+            keccak_xor_byte(suffix_idx, (uint8_t)(suffix >> 8));
+        }
+    }
+
+    keccak_xor_byte(rate_in_bytes - 1U, 0x80U);
+    __intrin_keccak_f1600();
+
+    while (output_byte_len > 0) {
+        block_size = output_byte_len < rate_in_bytes
+                         ? (unsigned int)output_byte_len
+                         : rate_in_bytes;
+        keccak_native_squeeze_bytes(output, block_size);
+        output += block_size;
+        output_byte_len -= block_size;
+
+        if (output_byte_len > 0) {
+            __intrin_keccak_f1600();
+        }
+    }
+#else
     uint64_t state[KECCAK_STATE_LANES];
     uint8_t *state_bytes = (uint8_t *)state;
     // 对 SHA3-256：
@@ -284,6 +401,7 @@ void keccak_bits(unsigned int rate,
             keccak_f1600_permute(state);
         }
     }
+#endif
 }
 
 void sha3_256(const uint8_t *input, uint64_t input_byte_len, uint8_t *digest_out) {
