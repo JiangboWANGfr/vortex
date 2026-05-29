@@ -1,0 +1,212 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+if [[ -f "$SCRIPT_DIR/runner_common.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh"
+else
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh.in"
+fi
+
+show_usage() {
+    cat <<EOF
+Vortex GHASH Smoke Runner
+
+Runs the spec-faithful software GHASH smoke (single-thread) and the SIMT
+fan-out variant on each requested simulator backend. No NATIVE/SOFTWARE
+matrix yet — hardware GHASH PE lands in a follow-up patch; both flavours
+here exercise the same header-only reference implementation.
+
+Usage:
+  $0 [options]
+
+Options:
+  --drivers=<list>            Comma-separated backends (default: simx)
+                              Supported: simx, rtlsim, de10pro
+  --variants=<list>           Comma-separated smoke variants
+                              (default: scalar,simt)
+                              scalar -> tests/regression/ghash_smoke
+                              simt   -> tests/regression/ghash_simt_smoke
+  --num-tasks=<n>             Tasks for the SIMT variant (default: 64)
+  --output-root=<path>        Output root (default: <build>/runner_output)
+  --results=<path>            Aggregate TSV (default:
+                              <output-root>/ghash_smoke/results/all/results.tsv)
+  --log-dir=<path>            Per-run logs (default:
+                              <output-root>/ghash_smoke/logs)
+  --startup-addr=<hex>        Kernel startup address (default: XLEN-specific)
+  --ext-f-disable             Build with EXT_F_DISABLE=1
+  --ext-d-disable             Build with EXT_D_DISABLE=1
+  --fd-disable                Shorthand for both ext-f-disable and ext-d-disable
+  --debug=<level>             Debug level passed to simulators (default: 0)
+  --help                      Show this help
+
+Defaults assume the prebuilt libvortex.a was compiled with EXT_F_DISABLE=1
+(soft-float rv64ima); pass --fd-disable explicitly if you regenerate the
+kernel runtime against a hard-float configuration.
+
+Examples:
+  $0
+  $0 --drivers=simx,rtlsim --num-tasks=128 --fd-disable
+EOF
+}
+
+validate_variant() {
+    case "$1" in
+        scalar|simt) ;;
+        *) die "unsupported variant: $1; supported: scalar simt" ;;
+    esac
+}
+
+variant_app_dir() {
+    case "$1" in
+        scalar) echo "$ROOT_DIR/tests/regression/ghash_smoke" ;;
+        simt)   echo "$ROOT_DIR/tests/regression/ghash_simt_smoke" ;;
+    esac
+}
+
+variant_opts() {
+    case "$1" in
+        scalar) echo "" ;;
+        simt)   echo "-n $NUM_TASKS" ;;
+    esac
+}
+
+build_driver_runtime() {
+    local driver="$1"
+    build_driver_runtime_common "$driver" 5000
+}
+
+# Pull the aggregate "PERF: instrs=N, cycles=N, IPC=N" line from a run log.
+# Emits a TSV fragment "instrs<TAB>cycles<TAB>IPC" (commas stripped); fields
+# are empty when the line is missing so the column count stays stable.
+extract_perf() {
+    local file="$1"
+    local line
+    line=$(grep -a '^PERF: instrs=' "$file" | tail -n 1 || true)
+    if [[ -z "$line" ]]; then
+        printf '\t\t'
+        return
+    fi
+    printf '%s' "$line" \
+        | sed -E 's/.*instrs=([0-9,]+), cycles=([0-9,]+), IPC=([0-9.]+).*/\1\t\2\t\3/' \
+        | tr -d ','
+}
+
+main() {
+    RUNNER_NAME="ghash_smoke"
+    DRIVER_LIST="simx"
+    VARIANT_LIST="scalar,simt"
+    NUM_TASKS=64
+    STARTUP_ADDR=""
+    EXT_F_DISABLE=0
+    EXT_D_DISABLE=0
+    DEBUG_LEVEL=0
+    OUTPUT_ROOT="$ROOT_DIR/runner_output"
+    RESULTS=""
+    LOG_DIR=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --drivers=*)      DRIVER_LIST="${1#*=}" ;;
+            --variants=*)     VARIANT_LIST="${1#*=}" ;;
+            --num-tasks=*)    NUM_TASKS="${1#*=}" ;;
+            --output-root=*)  OUTPUT_ROOT="${1#*=}" ;;
+            --results=*)      RESULTS="${1#*=}" ;;
+            --log-dir=*)      LOG_DIR="${1#*=}" ;;
+            --startup-addr=*) STARTUP_ADDR="${1#*=}" ;;
+            --ext-f-disable)  EXT_F_DISABLE=1 ;;
+            --ext-d-disable)  EXT_D_DISABLE=1 ;;
+            --fd-disable)     EXT_F_DISABLE=1; EXT_D_DISABLE=1 ;;
+            --debug=*)        DEBUG_LEVEL="${1#*=}" ;;
+            --help|-h)        show_usage; exit 0 ;;
+            *)                die "unknown option: $1" ;;
+        esac
+        shift
+    done
+
+    IFS=',' read -r -a DRIVERS  <<< "$DRIVER_LIST"
+    IFS=',' read -r -a VARIANTS <<< "$VARIANT_LIST"
+
+    local driver variant
+    for driver in "${DRIVERS[@]}";   do validate_driver "$driver";   done
+    for variant in "${VARIANTS[@]}"; do validate_variant "$variant"; done
+
+    load_xlen
+    set_default_startup_addr
+    source_toolchain_env
+    init_multi_driver_output
+    local run_output_dir="$OUTPUT_ROOT/$RUNNER_NAME"
+
+    echo "ROOT_DIR=$ROOT_DIR"
+    echo "OUTPUT_ROOT=$OUTPUT_ROOT"
+    echo "XLEN=$XLEN"
+    echo "DRIVERS=${DRIVERS[*]}"
+    echo "VARIANTS=${VARIANTS[*]}"
+    echo "NUM_TASKS=$NUM_TASKS"
+    echo "RESULTS=$RESULTS"
+
+    run_cmd make -C "$ROOT_DIR/hw" config
+    build_kernel
+    for driver in "${DRIVERS[@]}"; do
+        build_driver_runtime "$driver"
+    done
+
+    local header='algo\tvariant\tdriver\tstatus\tinstrs\tcycles\tIPC\tlog\n'
+    printf "$header" > "$RESULTS"
+    for driver in "${DRIVERS[@]}"; do
+        mkdir -p "$LOG_DIR/$driver" "$run_output_dir/results/$driver"
+        printf "$header" > "$run_output_dir/results/$driver/results.tsv"
+    done
+
+    local failures=0
+    for variant in "${VARIANTS[@]}"; do
+        local app_dir
+        app_dir=$(variant_app_dir "$variant")
+        local opts
+        opts=$(variant_opts "$variant")
+
+        local build_args=("make" "-C" "$app_dir" "clean" "all"
+                          "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR")
+        while IFS= read -r flag; do
+            [[ -n "$flag" ]] && build_args+=("$flag")
+        done < <(join_flags)
+        run_cmd "${build_args[@]}"
+
+        for driver in "${DRIVERS[@]}"; do
+            local log_file="$LOG_DIR/$driver/ghash-${variant}-${driver}.log"
+            local status
+            echo
+            echo "== Running ghash variant=$variant on $driver =="
+            if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$driver" \
+                    OPTS="$opts" >"$log_file" 2>&1; then
+                status="PASS"
+            else
+                status="FAIL"
+                failures=$((failures + 1))
+            fi
+
+            local perf instrs cycles ipc
+            perf=$(extract_perf "$log_file")
+            IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
+
+            printf 'ghash\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$variant" "$driver" "$status" \
+                "$instrs" "$cycles" "$ipc" "$log_file" >> "$RESULTS"
+            printf 'ghash\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$variant" "$driver" "$status" \
+                "$instrs" "$cycles" "$ipc" "$log_file" \
+                >> "$run_output_dir/results/$driver/results.tsv"
+        done
+    done
+
+    if [[ $failures -ne 0 ]]; then
+        die "$failures GHASH smoke run(s) failed; partial results in $RESULTS"
+    fi
+
+    echo "GHASH smoke results written to $RESULTS"
+}
+
+main "$@"
