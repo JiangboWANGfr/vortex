@@ -6,3 +6,5 @@ miscs/apptainer/vortex.sif
 .history
 ramulator*
 .codex
+# Claude Code session state
+.claude/

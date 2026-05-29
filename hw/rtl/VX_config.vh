@@ -914,6 +914,12 @@
     `define EXT_KECCAK_ENABLED 0
 `endif
 
+`ifdef EXT_GHASH_ENABLE
+    `define EXT_GHASH_ENABLED 1
+`else
+    `define EXT_GHASH_ENABLED 0
+`endif
+
 `ifdef EXT_TCU_ENABLE
     `define EXT_TCU_ENABLED 1
 `else

@@ -459,6 +459,23 @@ void Emulator::fetch_registers(std::vector<reg_data_t>& out, uint32_t wid, uint3
   }
 }
 
+// GF(2^128) carry-less multiply with GHASH reduction, operating on 128-bit
+// big-endian integers (NIST polynomial bit i = integer bit [127-i]). Bit-for-bit
+// identical to gf128_mul() in ghash_smoke/ghash_ref.h and to VX_crypto_ghash.sv.
+static inline unsigned __int128 ghash_gfmul_be(unsigned __int128 x, unsigned __int128 v) {
+  unsigned __int128 z = 0;
+  const unsigned __int128 R = ((unsigned __int128)0xE1) << 120;
+  for (int i = 0; i < 128; ++i) {
+    if ((x >> (127 - i)) & 1)
+      z ^= v;
+    bool lsb = (v & 1) != 0;
+    v >>= 1;
+    if (lsb)
+      v ^= R;
+  }
+  return z;
+}
+
 instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
   auto& warp = warps_.at(wid);
   assert(warp.tmask.any());
@@ -1087,6 +1104,46 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
       } break;
       case KeccakType::F1600:
         keccak_f1600(keccak_state);
+        rd_write = false;
+        break;
+      default:
+        std::abort();
+      }
+    },
+    [&](GhashType ghash_type) {
+      // Per-warp state: ghash[0]=H, ghash[1]=Y (128-bit big-endian integers).
+      // A 128-bit value spans (128/XLEN) XLEN-wide words; the word index selects
+      // the slice, mirroring the +:XLEN part-select in VX_crypto_ghash.sv.
+      auto& ghash = ghash_state_.at(wid);
+      const unsigned __int128 word_mask = (((unsigned __int128)1) << XLEN) - 1;
+      switch (ghash_type) {
+      case GhashType::SETH: {
+        uint32_t word = rs2_data[0].u32 & ((128 / XLEN) - 1);
+        uint32_t shift = word * XLEN;
+        unsigned __int128 val = ((unsigned __int128)(rs1_data[0].u) & word_mask) << shift;
+        ghash[0] = (ghash[0] & ~(word_mask << shift)) | val;
+        rd_write = false;
+      } break;
+      case GhashType::XOR: {
+        uint32_t word = rs2_data[0].u32 & ((128 / XLEN) - 1);
+        uint32_t shift = word * XLEN;
+        ghash[1] ^= ((unsigned __int128)(rs1_data[0].u) & word_mask) << shift;
+        rd_write = false;
+      } break;
+      case GhashType::RD: {
+        uint32_t word = rs1_data[0].u32 & ((128 / XLEN) - 1);
+        uint32_t shift = word * XLEN;
+        uint64_t value = (uint64_t)((ghash[1] >> shift) & word_mask);
+        for (uint32_t t = thread_start; t < num_threads; ++t) {
+          if (!warp.tmask.test(t))
+            continue;
+          rd_data[t].u = Word(value);
+        }
+        rd_write = true;
+      } break;
+      case GhashType::MUL:
+        // Y = Y * H  (scan Y bits, shift H), matching ghash_update_block.
+        ghash[1] = ghash_gfmul_be(ghash[1], ghash[0]);
         rd_write = false;
         break;
       default:

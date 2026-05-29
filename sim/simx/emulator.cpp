@@ -79,6 +79,7 @@ Emulator::Emulator(const Arch &arch, const DCRS &dcrs, Core* core)
     , warps_(arch.num_warps(), arch.num_threads())
     , barriers_(arch.num_barriers(), 0)
     , keccak_state_(arch.num_warps())
+    , ghash_state_(arch.num_warps())
     , ipdom_size_(arch.num_threads()-1)
   #ifdef EXT_TCU_ENABLE
     , tensor_unit_(core->tensor_unit())
@@ -115,6 +116,10 @@ void Emulator::reset() {
   }
 
   for (auto& state : keccak_state_) {
+    state.fill(0);
+  }
+
+  for (auto& state : ghash_state_) {
     state.fill(0);
   }
 

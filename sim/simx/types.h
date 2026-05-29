@@ -389,6 +389,30 @@ inline std::ostream &operator<<(std::ostream &os, const KeccakType& type) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+enum class GhashType {
+  SETH,
+  XOR,
+  RD,
+  MUL
+};
+
+struct IntrGhashArgs {
+};
+
+inline std::ostream &operator<<(std::ostream &os, const GhashType& type) {
+  switch (type) {
+  case GhashType::SETH: os << "GHASH_SETH"; break;
+  case GhashType::XOR:  os << "GHASH_XOR"; break;
+  case GhashType::RD:   os << "GHASH_RD"; break;
+  case GhashType::MUL:  os << "GHASH_MUL"; break;
+  default:
+    assert(false);
+  }
+  return os;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 enum class LsuType {
   LOAD,
   STORE,
@@ -755,6 +779,7 @@ using OpType = std::variant<
 , AesType
 , ShaType
 , KeccakType
+, GhashType
 , LsuType
 , AmoType
 , FpuType
@@ -779,6 +804,7 @@ using IntrArgs = std::variant<
 , IntrAesArgs
 , IntrShaArgs
 , IntrKeccakArgs
+, IntrGhashArgs
 , IntrLsuArgs
 , IntrAmoArgs
 , IntrFpuArgs

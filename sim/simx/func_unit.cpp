@@ -141,6 +141,22 @@ void AluUnit::tick() {
 				std::abort();
 			}
 			DT(3, this->name() << ": op=" << aes_type << ", " << *trace);
+		} else if (std::get_if<GhashType>(&trace->op_type)) {
+				auto ghash_type = std::get<GhashType>(trace->op_type);
+				switch (ghash_type) {
+				case GhashType::SETH:
+				case GhashType::XOR:
+				case GhashType::RD:
+					delay = 2;
+					break;
+				case GhashType::MUL:
+					// bit-serial GF(2^128) multiply: 128 cycles + accept/resp
+					delay = 130;
+					break;
+				default:
+					std::abort();
+				}
+				DT(3, this->name() << ": op=" << ghash_type << ", " << *trace);
 		} else {
 			std::abort();
 		}

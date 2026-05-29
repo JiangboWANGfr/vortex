@@ -292,12 +292,17 @@ package VX_gpu_pkg;
     localparam INST_CRYPTO_KECCAK_XOR = 4'b0101;
     localparam INST_CRYPTO_KECCAK_RD  = 4'b0110;
     localparam INST_CRYPTO_KECCAK_F1600 = 4'b0111;
+    localparam INST_CRYPTO_GHASH_SETH = 4'b1000;
+    localparam INST_CRYPTO_GHASH_XOR  = 4'b1001;
+    localparam INST_CRYPTO_GHASH_RD   = 4'b1010;
+    localparam INST_CRYPTO_GHASH_MUL  = 4'b1011;
 
-    localparam CRYPTO_CLASS_BITS = 2;
-    localparam CRYPTO_CLASS_AES  = 2'd0;
-    localparam CRYPTO_CLASS_SHA  = 2'd1;
-    localparam CRYPTO_CLASS_SM4  = 2'd2;
-    localparam CRYPTO_CLASS_MISC = 2'd3;
+    localparam CRYPTO_CLASS_BITS = 3;
+    localparam CRYPTO_CLASS_AES  = 3'd0;
+    localparam CRYPTO_CLASS_SHA  = 3'd1;
+    localparam CRYPTO_CLASS_SM4  = 3'd2;
+    localparam CRYPTO_CLASS_MISC = 3'd3;
+    localparam CRYPTO_CLASS_GHASH = 3'd4;
 
     ///////////////////////////////////////////////////////////////////////////
 

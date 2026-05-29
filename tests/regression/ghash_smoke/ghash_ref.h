@@ -71,6 +71,51 @@ static inline void gf128_mul(uint8_t Z[GHASH_BLOCK_BYTES],
   }
 }
 
+#ifdef GHASH_NATIVE
+// Hardware-accelerated path: drive the GHASH PE via custom intrinsics. The
+// per-warp {H, Y} state lives in hardware; the ctx struct is unused (one GHASH
+// instance per warp at a time). 128-bit values map to two 64-bit words with the
+// big-endian convention: word 1 = bytes[0..7] (MSB), word 0 = bytes[8..15].
+#include <vx_intrinsics.h>
+
+static inline uint64_t ghash_load64_be(const uint8_t *p) {
+  return ((uint64_t)p[0] << 56) | ((uint64_t)p[1] << 48)
+       | ((uint64_t)p[2] << 40) | ((uint64_t)p[3] << 32)
+       | ((uint64_t)p[4] << 24) | ((uint64_t)p[5] << 16)
+       | ((uint64_t)p[6] << 8)  | ((uint64_t)p[7]);
+}
+
+static inline void ghash_store64_be(uint8_t *p, uint64_t v) {
+  p[0] = (uint8_t)(v >> 56); p[1] = (uint8_t)(v >> 48);
+  p[2] = (uint8_t)(v >> 40); p[3] = (uint8_t)(v >> 32);
+  p[4] = (uint8_t)(v >> 24); p[5] = (uint8_t)(v >> 16);
+  p[6] = (uint8_t)(v >> 8);  p[7] = (uint8_t)(v);
+}
+
+static inline void ghash_init(ghash_ctx_t *ctx, const uint8_t H[GHASH_BLOCK_BYTES]) {
+  (void)ctx;
+  __intrin_ghash_seth(ghash_load64_be(H + 0), 1); // H[127:64] = bytes 0..7
+  __intrin_ghash_seth(ghash_load64_be(H + 8), 0); // H[63:0]  = bytes 8..15
+  // Clear Y: Y[w] ^= Y[w].
+  __intrin_ghash_xor(__intrin_ghash_rd(0), 0);
+  __intrin_ghash_xor(__intrin_ghash_rd(1), 1);
+}
+
+static inline void ghash_update_block(ghash_ctx_t *ctx,
+                                      const uint8_t block[GHASH_BLOCK_BYTES]) {
+  (void)ctx;
+  __intrin_ghash_xor(ghash_load64_be(block + 0), 1);
+  __intrin_ghash_xor(ghash_load64_be(block + 8), 0);
+  __intrin_ghash_mul(); // Y = (Y ^ block) * H
+}
+
+static inline void ghash_final(const ghash_ctx_t *ctx,
+                               uint8_t out[GHASH_BLOCK_BYTES]) {
+  (void)ctx;
+  ghash_store64_be(out + 0, __intrin_ghash_rd(1)); // bytes 0..7  = Y[127:64]
+  ghash_store64_be(out + 8, __intrin_ghash_rd(0)); // bytes 8..15 = Y[63:0]
+}
+#else
 static inline void ghash_init(ghash_ctx_t *ctx, const uint8_t H[GHASH_BLOCK_BYTES]) {
   for (int i = 0; i < GHASH_BLOCK_BYTES; ++i)
     ctx->H[i] = H[i];
@@ -87,6 +132,13 @@ static inline void ghash_update_block(ghash_ctx_t *ctx,
   gf128_mul(ctx->Y, tmp, ctx->H);
 }
 
+static inline void ghash_final(const ghash_ctx_t *ctx,
+                               uint8_t out[GHASH_BLOCK_BYTES]) {
+  for (int i = 0; i < GHASH_BLOCK_BYTES; ++i)
+    out[i] = ctx->Y[i];
+}
+#endif // GHASH_NATIVE
+
 // Process len_bytes of data; len_bytes MUST be a multiple of GHASH_BLOCK_BYTES.
 // Padding/length-block framing is the caller's responsibility (GCM layer).
 static inline void ghash_update(ghash_ctx_t *ctx,
@@ -95,12 +147,6 @@ static inline void ghash_update(ghash_ctx_t *ctx,
   for (size_t off = 0; off < len_bytes; off += GHASH_BLOCK_BYTES) {
     ghash_update_block(ctx, data + off);
   }
-}
-
-static inline void ghash_final(const ghash_ctx_t *ctx,
-                               uint8_t out[GHASH_BLOCK_BYTES]) {
-  for (int i = 0; i < GHASH_BLOCK_BYTES; ++i)
-    out[i] = ctx->Y[i];
 }
 
 // Convenience: GHASH(H, data) in one call.

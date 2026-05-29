@@ -275,6 +275,65 @@ static inline void __intrin_keccak_f1600(void) {
 }
 #endif
 
+// GHASH (GF(2^128) MAC) native intrinsics. EXT1 (0x0b), funct7=0x04.
+//   funct3: 0=SETH (H[word]=rs1), 1=XOR (Y[word]^=rs1), 2=RD (rd=Y[word]), 3=MUL.
+// A 128-bit value is addressed as 128/XLEN words; the word index is rs2 low bits
+// (SETH/XOR) or rs1 low bits (RD).
+#ifdef XLEN_64
+static inline void __intrin_ghash_seth(uint64_t value, uint32_t word) {
+    __asm__ volatile (".insn r 0x0b, 0, 0x04, x0, %0, %1" :: "r"(value), "r"(word));
+}
+
+static inline void __intrin_ghash_xor(uint64_t value, uint32_t word) {
+    __asm__ volatile (".insn r 0x0b, 1, 0x04, x0, %0, %1" :: "r"(value), "r"(word));
+}
+
+static inline uint64_t __intrin_ghash_rd(uint32_t word) {
+    uint64_t rd;
+    __asm__ volatile (".insn r 0x0b, 2, 0x04, %0, %1, x0" : "=r"(rd) : "r"(word));
+    return rd;
+}
+
+static inline void __intrin_ghash_mul(void) {
+    __asm__ volatile (".insn r 0x0b, 3, 0x04, x0, x0, x0");
+}
+#else
+static inline void __intrin_ghash_seth_u32(uint32_t value, uint32_t slice) {
+    __asm__ volatile (".insn r 0x0b, 0, 0x04, x0, %0, %1" :: "r"(value), "r"(slice));
+}
+
+static inline void __intrin_ghash_xor_u32(uint32_t value, uint32_t slice) {
+    __asm__ volatile (".insn r 0x0b, 1, 0x04, x0, %0, %1" :: "r"(value), "r"(slice));
+}
+
+static inline uint32_t __intrin_ghash_rd_u32(uint32_t slice) {
+    uint32_t rd;
+    __asm__ volatile (".insn r 0x0b, 2, 0x04, %0, %1, x0" : "=r"(rd) : "r"(slice));
+    return rd;
+}
+
+// On RV32 a 64-bit half spans two 32-bit slices (word*2, word*2+1).
+static inline void __intrin_ghash_seth(uint64_t value, uint32_t word) {
+    __intrin_ghash_seth_u32((uint32_t)value, word * 2U);
+    __intrin_ghash_seth_u32((uint32_t)(value >> 32), word * 2U + 1U);
+}
+
+static inline void __intrin_ghash_xor(uint64_t value, uint32_t word) {
+    __intrin_ghash_xor_u32((uint32_t)value, word * 2U);
+    __intrin_ghash_xor_u32((uint32_t)(value >> 32), word * 2U + 1U);
+}
+
+static inline uint64_t __intrin_ghash_rd(uint32_t word) {
+    uint64_t lo = __intrin_ghash_rd_u32(word * 2U);
+    uint64_t hi = __intrin_ghash_rd_u32(word * 2U + 1U);
+    return lo | (hi << 32);
+}
+
+static inline void __intrin_ghash_mul(void) {
+    __asm__ volatile (".insn r 0x0b, 3, 0x04, x0, x0, x0");
+}
+#endif
+
 static inline uint32_t __intrin_sha256sig0(uint32_t rs1) {
     uint32_t rd;
     __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x102" : "=r"(rd) : "r"(rs1));

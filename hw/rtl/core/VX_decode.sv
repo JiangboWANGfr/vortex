@@ -618,6 +618,39 @@ module VX_decode import VX_gpu_pkg::*; #(
                         endcase
                     end
                 `endif
+                `ifdef EXT_GHASH_ENABLE
+                    7'h04: begin // GHASH custom extension
+                        ex_type = EX_CRYPTO;
+                        op_args.crypto.unit = CRYPTO_CLASS_GHASH;
+                        op_args.crypto.byte_select = '0;
+                        op_args.crypto.round_imm = '0;
+                        case (funct3)
+                            3'h0: begin // GSETH: H[word] = rs1, rs2[0]=word
+                                op_type = INST_OP_BITS'(INST_CRYPTO_GHASH_SETH);
+                                `USED_IREG (rs1);
+                                `USED_IREG (rs2);
+                            end
+                            3'h1: begin // GXOR: Y[word] ^= rs1, rs2[0]=word
+                                op_type = INST_OP_BITS'(INST_CRYPTO_GHASH_XOR);
+                                `USED_IREG (rs1);
+                                `USED_IREG (rs2);
+                            end
+                            3'h2: begin // GRD: rd = Y[word], rs1[0]=word
+                                op_type = INST_OP_BITS'(INST_CRYPTO_GHASH_RD);
+                                `USED_IREG (rd);
+                                `USED_IREG (rs1);
+                            end
+                            3'h3: begin // GMUL: Y = Y * H mod P
+                                op_type = INST_OP_BITS'(INST_CRYPTO_GHASH_MUL);
+                            end
+                            default: begin
+                                ex_type = 'x;
+                                op_type = 'x;
+                                op_args = 'x;
+                            end
+                        endcase
+                    end
+                `endif
                 `ifdef EXT_TCU_ENABLE
                     7'h02: begin
                         case (funct3)

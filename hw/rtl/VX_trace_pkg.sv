@@ -209,6 +209,15 @@ package VX_trace_pkg;
                         default:                  `TRACE(level, ("?"))
                     endcase
                 end
+                CRYPTO_CLASS_GHASH: begin
+                    case (INST_ALU_BITS'(op_type))
+                        INST_CRYPTO_GHASH_SETH: `TRACE(level, ("GHASH.SETH"))
+                        INST_CRYPTO_GHASH_XOR:  `TRACE(level, ("GHASH.XOR"))
+                        INST_CRYPTO_GHASH_RD:   `TRACE(level, ("GHASH.RD"))
+                        INST_CRYPTO_GHASH_MUL:  `TRACE(level, ("GHASH.MUL"))
+                        default:                `TRACE(level, ("?"))
+                    endcase
+                end
                 default: `TRACE(level, ("?"))
             endcase
         end

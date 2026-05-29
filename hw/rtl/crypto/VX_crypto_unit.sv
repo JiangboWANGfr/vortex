@@ -33,7 +33,7 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
     localparam BLOCK_SIZE   = `ISSUE_WIDTH;
     localparam NUM_LANES    = `NUM_ALU_LANES;
     localparam PARTIAL_BW   = (BLOCK_SIZE != `ISSUE_WIDTH) || (NUM_LANES != `SIMD_WIDTH);
-    localparam ACTIVE_PE_COUNT = `EXT_AES_ENABLED + `EXT_SHA256_ENABLED + `EXT_KECCAK_ENABLED;
+    localparam ACTIVE_PE_COUNT = `EXT_AES_ENABLED + `EXT_SHA256_ENABLED + `EXT_KECCAK_ENABLED + `EXT_GHASH_ENABLED;
     localparam PE_COUNT     = `UP(ACTIVE_PE_COUNT);
     localparam PE_SEL_BITS  = `CLOG2(PE_COUNT);
 `ifdef EXT_AES_ENABLE
@@ -44,6 +44,9 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
 `endif
 `ifdef EXT_KECCAK_ENABLE
     localparam PE_IDX_KECCAK = `EXT_AES_ENABLED + `EXT_SHA256_ENABLED;
+`endif
+`ifdef EXT_GHASH_ENABLE
+    localparam PE_IDX_GHASH = `EXT_AES_ENABLED + `EXT_SHA256_ENABLED + `EXT_KECCAK_ENABLED;
 `endif
 
     VX_execute_if #(
@@ -88,6 +91,10 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
         `ifdef EXT_KECCAK_ENABLE
             if (per_block_execute_if[block_idx].data.op_args.crypto.unit == CRYPTO_CLASS_MISC)
                 pe_select = PE_IDX_KECCAK;
+        `endif
+        `ifdef EXT_GHASH_ENABLE
+            if (per_block_execute_if[block_idx].data.op_args.crypto.unit == CRYPTO_CLASS_GHASH)
+                pe_select = PE_IDX_GHASH;
         `endif
         end
 
@@ -142,6 +149,20 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
             .reset      (reset),
             .execute_if (pe_execute_if[PE_IDX_KECCAK]),
             .result_if  (pe_result_if[PE_IDX_KECCAK])
+        );
+    `endif
+
+    `ifdef EXT_GHASH_ENABLE
+        VX_crypto_ghash #(
+            .INSTANCE_ID (`SFORMATF(("%s-ghash%0d", INSTANCE_ID, block_idx))),
+            .NUM_LANES   (NUM_LANES),
+            .BLOCK_SIZE  (BLOCK_SIZE),
+            .BLOCK_IDX   (block_idx)
+        ) ghash_unit (
+            .clk        (clk),
+            .reset      (reset),
+            .execute_if (pe_execute_if[PE_IDX_GHASH]),
+            .result_if  (pe_result_if[PE_IDX_GHASH])
         );
     `endif
 

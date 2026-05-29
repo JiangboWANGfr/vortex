@@ -151,6 +151,9 @@ private:
   WarpMask    stalled_warps_;
   std::vector<WarpMask> barriers_;
   std::vector<std::array<uint64_t, 25>> keccak_state_;
+  // GHASH state per warp: [0]=H, [1]=Y as 128-bit big-endian integers
+  // (byte 0 of the NIST block is the most-significant byte).
+  std::vector<std::array<unsigned __int128, 2>> ghash_state_;
   std::unordered_map<int, std::stringstream> print_bufs_;
   MemoryUnit  mmu_;
   uint32_t    ipdom_size_;

@@ -220,6 +220,16 @@ static op_string_t op_string(const Instr &instr) {
         std::abort();
       }
     },
+    [&](GhashType ghash_type)-> op_string_t {
+      switch (ghash_type) {
+      case GhashType::SETH: return {"GHASH_SETH", ""};
+      case GhashType::XOR:  return {"GHASH_XOR", ""};
+      case GhashType::RD:   return {"GHASH_RD", ""};
+      case GhashType::MUL:  return {"GHASH_MUL", ""};
+      default:
+        std::abort();
+      }
+    },
     [&](FpuType fpu_type)-> op_string_t {
       auto fpuArgs = std::get<IntrFpuArgs>(instrArgs);
       switch (fpu_type) {
@@ -1238,6 +1248,33 @@ decode_integer_alu:
         break;
       case 3:
         instr->setOpType(KeccakType::F1600);
+        break;
+      default:
+        std::abort();
+      }
+      ibuffer.push_back(instr);
+    } break;
+    case 4: {
+      auto instr = std::allocate_shared<Instr>(instr_pool_, uuid, FUType::ALU);
+      instr->setArgs(IntrGhashArgs{});
+      switch (funct3) {
+      case 0:
+        instr->setOpType(GhashType::SETH);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        instr->setSrcReg(1, rs2, RegType::Integer);
+        break;
+      case 1:
+        instr->setOpType(GhashType::XOR);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        instr->setSrcReg(1, rs2, RegType::Integer);
+        break;
+      case 2:
+        instr->setOpType(GhashType::RD);
+        instr->setDestReg(rd, RegType::Integer);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        break;
+      case 3:
+        instr->setOpType(GhashType::MUL);
         break;
       default:
         std::abort();

@@ -15,10 +15,24 @@ show_usage() {
     cat <<EOF
 Vortex GHASH Smoke Runner
 
-Runs the spec-faithful software GHASH smoke (single-thread) and the SIMT
-fan-out variant on each requested simulator backend. No NATIVE/SOFTWARE
-matrix yet — hardware GHASH PE lands in a follow-up patch; both flavours
-here exercise the same header-only reference implementation.
+Runs the GHASH smoke across an accel-mode x variant x driver matrix and
+emits a TSV with instrs/cycles/IPC. The same 8 algebraic-identity checks
+run in every mode, so SOFTWARE and NATIVE rows are a direct correctness
+cross-check of the hardware GHASH PE against the software gold model.
+
+Accel modes:
+  SOFTWARE : pure GF(2^128) reference (no hardware GHASH PE)
+  NATIVE   : hardware GHASH PE via custom intrinsics; rebuilds the sim
+             driver with -DEXT_GHASH_ENABLE and the kernel with
+             -DGHASH_NATIVE.
+
+Variants:
+  scalar : tests/regression/ghash_smoke      (one GHASH chain per warp)
+  simt   : tests/regression/ghash_simt_smoke  (vx_spawn_threads fan-out)
+
+NOTE: NATIVE + simt is skipped — the GHASH PE holds one {H,Y} state per
+warp, so independent per-lane chains would clobber each other. Per-lane
+state (warp-level multi-chain) is future work.
 
 Usage:
   $0 [options]
@@ -26,10 +40,8 @@ Usage:
 Options:
   --drivers=<list>            Comma-separated backends (default: simx)
                               Supported: simx, rtlsim, de10pro
-  --variants=<list>           Comma-separated smoke variants
-                              (default: scalar,simt)
-                              scalar -> tests/regression/ghash_smoke
-                              simt   -> tests/regression/ghash_simt_smoke
+  --accel-modes=<list>        Comma-separated modes (default: SOFTWARE,NATIVE)
+  --variants=<list>           Comma-separated variants (default: scalar,simt)
   --num-tasks=<n>             Tasks for the SIMT variant (default: 64)
   --output-root=<path>        Output root (default: <build>/runner_output)
   --results=<path>            Aggregate TSV (default:
@@ -37,20 +49,26 @@ Options:
   --log-dir=<path>            Per-run logs (default:
                               <output-root>/ghash_smoke/logs)
   --startup-addr=<hex>        Kernel startup address (default: XLEN-specific)
-  --ext-f-disable             Build with EXT_F_DISABLE=1
-  --ext-d-disable             Build with EXT_D_DISABLE=1
+  --ext-f-disable             Build kernel with EXT_F_DISABLE=1
+  --ext-d-disable             Build kernel with EXT_D_DISABLE=1
   --fd-disable                Shorthand for both ext-f-disable and ext-d-disable
   --debug=<level>             Debug level passed to simulators (default: 0)
   --help                      Show this help
 
-Defaults assume the prebuilt libvortex.a was compiled with EXT_F_DISABLE=1
-(soft-float rv64ima); pass --fd-disable explicitly if you regenerate the
-kernel runtime against a hard-float configuration.
+The prebuilt libvortex.a is typically soft-float (rv64ima); pass --fd-disable
+to match it when (re)building the kernel runtime.
 
 Examples:
-  $0
-  $0 --drivers=simx,rtlsim --num-tasks=128 --fd-disable
+  $0 --drivers=simx --accel-modes=SOFTWARE,NATIVE --fd-disable
+  $0 --drivers=simx,rtlsim --accel-modes=NATIVE --variants=scalar --fd-disable
 EOF
+}
+
+validate_accel_mode() {
+    case "$1" in
+        SOFTWARE|NATIVE) ;;
+        *) die "unsupported accel mode: $1; supported: SOFTWARE NATIVE" ;;
+    esac
 }
 
 validate_variant() {
@@ -74,14 +92,7 @@ variant_opts() {
     esac
 }
 
-build_driver_runtime() {
-    local driver="$1"
-    build_driver_runtime_common "$driver" 5000
-}
-
 # Pull the aggregate "PERF: instrs=N, cycles=N, IPC=N" line from a run log.
-# Emits a TSV fragment "instrs<TAB>cycles<TAB>IPC" (commas stripped); fields
-# are empty when the line is missing so the column count stays stable.
 extract_perf() {
     local file="$1"
     local line
@@ -98,6 +109,7 @@ extract_perf() {
 main() {
     RUNNER_NAME="ghash_smoke"
     DRIVER_LIST="simx"
+    ACCEL_MODE_LIST="SOFTWARE,NATIVE"
     VARIANT_LIST="scalar,simt"
     NUM_TASKS=64
     STARTUP_ADDR=""
@@ -111,6 +123,7 @@ main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --drivers=*)      DRIVER_LIST="${1#*=}" ;;
+            --accel-modes=*)  ACCEL_MODE_LIST="${1#*=}" ;;
             --variants=*)     VARIANT_LIST="${1#*=}" ;;
             --num-tasks=*)    NUM_TASKS="${1#*=}" ;;
             --output-root=*)  OUTPUT_ROOT="${1#*=}" ;;
@@ -127,12 +140,14 @@ main() {
         shift
     done
 
-    IFS=',' read -r -a DRIVERS  <<< "$DRIVER_LIST"
-    IFS=',' read -r -a VARIANTS <<< "$VARIANT_LIST"
+    IFS=',' read -r -a DRIVERS     <<< "$DRIVER_LIST"
+    IFS=',' read -r -a ACCEL_MODES <<< "$ACCEL_MODE_LIST"
+    IFS=',' read -r -a VARIANTS    <<< "$VARIANT_LIST"
 
-    local driver variant
-    for driver in "${DRIVERS[@]}";   do validate_driver "$driver";   done
-    for variant in "${VARIANTS[@]}"; do validate_variant "$variant"; done
+    local driver mode variant
+    for driver in "${DRIVERS[@]}";      do validate_driver "$driver";      done
+    for mode in "${ACCEL_MODES[@]}";    do validate_accel_mode "$mode";    done
+    for variant in "${VARIANTS[@]}";    do validate_variant "$variant";    done
 
     load_xlen
     set_default_startup_addr
@@ -144,17 +159,15 @@ main() {
     echo "OUTPUT_ROOT=$OUTPUT_ROOT"
     echo "XLEN=$XLEN"
     echo "DRIVERS=${DRIVERS[*]}"
+    echo "ACCEL_MODES=${ACCEL_MODES[*]}"
     echo "VARIANTS=${VARIANTS[*]}"
     echo "NUM_TASKS=$NUM_TASKS"
     echo "RESULTS=$RESULTS"
 
     run_cmd make -C "$ROOT_DIR/hw" config
     build_kernel
-    for driver in "${DRIVERS[@]}"; do
-        build_driver_runtime "$driver"
-    done
 
-    local header='algo\tvariant\tdriver\tstatus\tinstrs\tcycles\tIPC\tlog\n'
+    local header='algo\taccel_mode\tvariant\tdriver\tstatus\tinstrs\tcycles\tIPC\tlog\n'
     printf "$header" > "$RESULTS"
     for driver in "${DRIVERS[@]}"; do
         mkdir -p "$LOG_DIR/$driver" "$run_output_dir/results/$driver"
@@ -162,43 +175,63 @@ main() {
     done
 
     local failures=0
-    for variant in "${VARIANTS[@]}"; do
-        local app_dir
-        app_dir=$(variant_app_dir "$variant")
-        local opts
-        opts=$(variant_opts "$variant")
-
-        local build_args=("make" "-C" "$app_dir" "clean" "all"
-                          "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR")
-        while IFS= read -r flag; do
-            [[ -n "$flag" ]] && build_args+=("$flag")
-        done < <(join_flags)
-        run_cmd "${build_args[@]}"
-
+    for mode in "${ACCEL_MODES[@]}"; do
+        # The hardware GHASH PE is compiled into the simulator only with
+        # -DEXT_GHASH_ENABLE, so the driver runtime must be rebuilt per mode.
+        local -a driver_cfg=()
+        if [[ "$mode" == "NATIVE" ]]; then
+            driver_cfg+=("CONFIGS=-DEXT_GHASH_ENABLE")
+        fi
         for driver in "${DRIVERS[@]}"; do
-            local log_file="$LOG_DIR/$driver/ghash-${variant}-${driver}.log"
-            local status
-            echo
-            echo "== Running ghash variant=$variant on $driver =="
-            if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$driver" \
-                    OPTS="$opts" >"$log_file" 2>&1; then
-                status="PASS"
-            else
-                status="FAIL"
-                failures=$((failures + 1))
+            build_driver_runtime_common "$driver" 5000 "${driver_cfg[@]}"
+        done
+
+        for variant in "${VARIANTS[@]}"; do
+            if [[ "$mode" == "NATIVE" && "$variant" == "simt" ]]; then
+                echo "== SKIP ghash mode=NATIVE variant=simt (per-warp state) =="
+                continue
             fi
 
-            local perf instrs cycles ipc
-            perf=$(extract_perf "$log_file")
-            IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
+            local app_dir opts
+            app_dir=$(variant_app_dir "$variant")
+            opts=$(variant_opts "$variant")
 
-            printf 'ghash\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-                "$variant" "$driver" "$status" \
-                "$instrs" "$cycles" "$ipc" "$log_file" >> "$RESULTS"
-            printf 'ghash\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-                "$variant" "$driver" "$status" \
-                "$instrs" "$cycles" "$ipc" "$log_file" \
-                >> "$run_output_dir/results/$driver/results.tsv"
+            local build_args=("make" "-C" "$app_dir" "clean" "all"
+                              "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR")
+            # GHASH_ACCEL_MODE is only meaningful for the scalar app's Makefile;
+            # the simt app ignores it (software only).
+            if [[ "$variant" == "scalar" ]]; then
+                build_args+=("GHASH_ACCEL_MODE=$mode")
+            fi
+            while IFS= read -r flag; do
+                [[ -n "$flag" ]] && build_args+=("$flag")
+            done < <(join_flags)
+            run_cmd "${build_args[@]}"
+
+            for driver in "${DRIVERS[@]}"; do
+                local log_file="$LOG_DIR/$driver/ghash-${mode}-${variant}-${driver}.log"
+                local status
+                echo
+                echo "== Running ghash mode=$mode variant=$variant on $driver =="
+                if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$driver" \
+                        OPTS="$opts" >"$log_file" 2>&1; then
+                    status="PASS"
+                else
+                    status="FAIL"
+                    failures=$((failures + 1))
+                fi
+
+                local perf instrs cycles ipc
+                perf=$(extract_perf "$log_file")
+                IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
+
+                local row
+                row=$(printf 'ghash\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+                    "$mode" "$variant" "$driver" "$status" \
+                    "$instrs" "$cycles" "$ipc" "$log_file")
+                printf '%s\n' "$row" >> "$RESULTS"
+                printf '%s\n' "$row" >> "$run_output_dir/results/$driver/results.tsv"
+            done
         done
     done
 
