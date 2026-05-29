@@ -161,6 +161,16 @@ static uint32_t sigma1(uint32_t x) {
 #endif
 }
 
+#define SHA256_ROUND(a, b, c, d, e, f, g, h, k, w) do { \
+    uint32_t t1 = (h) + Sigma1(e) + ch((e), (f), (g)) + (k) + (w); \
+    uint32_t t2 = Sigma0(a) + maj((a), (b), (c)); \
+    (d) += t1; \
+    (h) = t1 + t2; \
+} while (0)
+
+#define SHA256_SCHED(w0, w1, w9, w14) \
+    ((w0) += sigma1(w14) + (w9) + sigma0(w1))
+
 void sha256(uint8_t *buf, uint32_t n_bytes, uint8_t *digest_out) {
     /*
      * After padding, the total byte count is always a multiple of 64.  SHA-256
@@ -186,8 +196,6 @@ void sha256(uint8_t *buf, uint32_t n_bytes, uint8_t *digest_out) {
     }
 
     for (uint32_t block = 0; block < n_blocks; ++block) {
-        uint32_t W[64];
-
         /*
          * M points to the start of the current 64-byte block inside buf.
          *
@@ -200,28 +208,22 @@ void sha256(uint8_t *buf, uint32_t n_bytes, uint8_t *digest_out) {
          */
         const uint8_t *M = buf + (block << 6);
 
-        /*
-         * Split the 64-byte block into the first 16 words of the message
-         * schedule.  Each W[t] is 4 bytes, so t << 2 means t * 4:
-         *   W[0]  reads M + 0
-         *   W[1]  reads M + 4
-         *   ...
-         *   W[15] reads M + 60
-         *
-         * SHA-256 defines these words in big-endian order, so load_be32()
-         * combines bytes as p[0]<<24 | p[1]<<16 | p[2]<<8 | p[3].
-         */
-        for (uint32_t t = 0; t < 16; ++t) {
-            W[t] = load_be32(M + (t << 2));
-        }
-
-        /*
-         * Expand 16 input words into the full 64-word message schedule.
-         * All additions are modulo 2^32 because the variables are uint32_t.
-         */
-        for (uint32_t t = 16; t < 64; ++t) {
-            W[t] = sigma1(W[t - 2]) + W[t - 7] + sigma0(W[t - 15]) + W[t - 16];
-        }
+        uint32_t w0  = load_be32(M + 0);
+        uint32_t w1  = load_be32(M + 4);
+        uint32_t w2  = load_be32(M + 8);
+        uint32_t w3  = load_be32(M + 12);
+        uint32_t w4  = load_be32(M + 16);
+        uint32_t w5  = load_be32(M + 20);
+        uint32_t w6  = load_be32(M + 24);
+        uint32_t w7  = load_be32(M + 28);
+        uint32_t w8  = load_be32(M + 32);
+        uint32_t w9  = load_be32(M + 36);
+        uint32_t w10 = load_be32(M + 40);
+        uint32_t w11 = load_be32(M + 44);
+        uint32_t w12 = load_be32(M + 48);
+        uint32_t w13 = load_be32(M + 52);
+        uint32_t w14 = load_be32(M + 56);
+        uint32_t w15 = load_be32(M + 60);
 
         /*
          * Initialize the 8 working variables from the current hash state.
@@ -238,27 +240,77 @@ void sha256(uint8_t *buf, uint32_t n_bytes, uint8_t *digest_out) {
         uint32_t h = H[7];
 
         /*
-         * Compression function: 64 rounds per block.
-         *
-         * T1 mixes the previous h, the e/f/g choose function, one round
-         * constant K[t], and one schedule word W[t].
-         *
-         * T2 mixes a/b/c through the majority function.  The assignments below
-         * shift the pipeline of working variables and inject the new values at
-         * a and e, matching the SHA-256 round definition.
+         * Compression function: 64 rounds per block.  Keep the 16-word
+         * schedule in scalars so the compiler can avoid a stack-resident W[64]
+         * array and loop index arithmetic in the hot path.
          */
-        for (uint32_t t = 0; t < 64; ++t) {
-            uint32_t T1 = h + Sigma1(e) + ch(e, f, g) + K[t] + W[t];
-            uint32_t T2 = Sigma0(a) + maj(a, b, c);
-            h = g;
-            g = f;
-            f = e;
-            e = d + T1;
-            d = c;
-            c = b;
-            b = a;
-            a = T1 + T2;
-        }
+        SHA256_ROUND(a, b, c, d, e, f, g, h, K[0],  w0);
+        SHA256_ROUND(h, a, b, c, d, e, f, g, K[1],  w1);
+        SHA256_ROUND(g, h, a, b, c, d, e, f, K[2],  w2);
+        SHA256_ROUND(f, g, h, a, b, c, d, e, K[3],  w3);
+        SHA256_ROUND(e, f, g, h, a, b, c, d, K[4],  w4);
+        SHA256_ROUND(d, e, f, g, h, a, b, c, K[5],  w5);
+        SHA256_ROUND(c, d, e, f, g, h, a, b, K[6],  w6);
+        SHA256_ROUND(b, c, d, e, f, g, h, a, K[7],  w7);
+        SHA256_ROUND(a, b, c, d, e, f, g, h, K[8],  w8);
+        SHA256_ROUND(h, a, b, c, d, e, f, g, K[9],  w9);
+        SHA256_ROUND(g, h, a, b, c, d, e, f, K[10], w10);
+        SHA256_ROUND(f, g, h, a, b, c, d, e, K[11], w11);
+        SHA256_ROUND(e, f, g, h, a, b, c, d, K[12], w12);
+        SHA256_ROUND(d, e, f, g, h, a, b, c, K[13], w13);
+        SHA256_ROUND(c, d, e, f, g, h, a, b, K[14], w14);
+        SHA256_ROUND(b, c, d, e, f, g, h, a, K[15], w15);
+
+        SHA256_ROUND(a, b, c, d, e, f, g, h, K[16], SHA256_SCHED(w0,  w1,  w9,  w14));
+        SHA256_ROUND(h, a, b, c, d, e, f, g, K[17], SHA256_SCHED(w1,  w2,  w10, w15));
+        SHA256_ROUND(g, h, a, b, c, d, e, f, K[18], SHA256_SCHED(w2,  w3,  w11, w0));
+        SHA256_ROUND(f, g, h, a, b, c, d, e, K[19], SHA256_SCHED(w3,  w4,  w12, w1));
+        SHA256_ROUND(e, f, g, h, a, b, c, d, K[20], SHA256_SCHED(w4,  w5,  w13, w2));
+        SHA256_ROUND(d, e, f, g, h, a, b, c, K[21], SHA256_SCHED(w5,  w6,  w14, w3));
+        SHA256_ROUND(c, d, e, f, g, h, a, b, K[22], SHA256_SCHED(w6,  w7,  w15, w4));
+        SHA256_ROUND(b, c, d, e, f, g, h, a, K[23], SHA256_SCHED(w7,  w8,  w0,  w5));
+        SHA256_ROUND(a, b, c, d, e, f, g, h, K[24], SHA256_SCHED(w8,  w9,  w1,  w6));
+        SHA256_ROUND(h, a, b, c, d, e, f, g, K[25], SHA256_SCHED(w9,  w10, w2,  w7));
+        SHA256_ROUND(g, h, a, b, c, d, e, f, K[26], SHA256_SCHED(w10, w11, w3,  w8));
+        SHA256_ROUND(f, g, h, a, b, c, d, e, K[27], SHA256_SCHED(w11, w12, w4,  w9));
+        SHA256_ROUND(e, f, g, h, a, b, c, d, K[28], SHA256_SCHED(w12, w13, w5,  w10));
+        SHA256_ROUND(d, e, f, g, h, a, b, c, K[29], SHA256_SCHED(w13, w14, w6,  w11));
+        SHA256_ROUND(c, d, e, f, g, h, a, b, K[30], SHA256_SCHED(w14, w15, w7,  w12));
+        SHA256_ROUND(b, c, d, e, f, g, h, a, K[31], SHA256_SCHED(w15, w0,  w8,  w13));
+
+        SHA256_ROUND(a, b, c, d, e, f, g, h, K[32], SHA256_SCHED(w0,  w1,  w9,  w14));
+        SHA256_ROUND(h, a, b, c, d, e, f, g, K[33], SHA256_SCHED(w1,  w2,  w10, w15));
+        SHA256_ROUND(g, h, a, b, c, d, e, f, K[34], SHA256_SCHED(w2,  w3,  w11, w0));
+        SHA256_ROUND(f, g, h, a, b, c, d, e, K[35], SHA256_SCHED(w3,  w4,  w12, w1));
+        SHA256_ROUND(e, f, g, h, a, b, c, d, K[36], SHA256_SCHED(w4,  w5,  w13, w2));
+        SHA256_ROUND(d, e, f, g, h, a, b, c, K[37], SHA256_SCHED(w5,  w6,  w14, w3));
+        SHA256_ROUND(c, d, e, f, g, h, a, b, K[38], SHA256_SCHED(w6,  w7,  w15, w4));
+        SHA256_ROUND(b, c, d, e, f, g, h, a, K[39], SHA256_SCHED(w7,  w8,  w0,  w5));
+        SHA256_ROUND(a, b, c, d, e, f, g, h, K[40], SHA256_SCHED(w8,  w9,  w1,  w6));
+        SHA256_ROUND(h, a, b, c, d, e, f, g, K[41], SHA256_SCHED(w9,  w10, w2,  w7));
+        SHA256_ROUND(g, h, a, b, c, d, e, f, K[42], SHA256_SCHED(w10, w11, w3,  w8));
+        SHA256_ROUND(f, g, h, a, b, c, d, e, K[43], SHA256_SCHED(w11, w12, w4,  w9));
+        SHA256_ROUND(e, f, g, h, a, b, c, d, K[44], SHA256_SCHED(w12, w13, w5,  w10));
+        SHA256_ROUND(d, e, f, g, h, a, b, c, K[45], SHA256_SCHED(w13, w14, w6,  w11));
+        SHA256_ROUND(c, d, e, f, g, h, a, b, K[46], SHA256_SCHED(w14, w15, w7,  w12));
+        SHA256_ROUND(b, c, d, e, f, g, h, a, K[47], SHA256_SCHED(w15, w0,  w8,  w13));
+
+        SHA256_ROUND(a, b, c, d, e, f, g, h, K[48], SHA256_SCHED(w0,  w1,  w9,  w14));
+        SHA256_ROUND(h, a, b, c, d, e, f, g, K[49], SHA256_SCHED(w1,  w2,  w10, w15));
+        SHA256_ROUND(g, h, a, b, c, d, e, f, K[50], SHA256_SCHED(w2,  w3,  w11, w0));
+        SHA256_ROUND(f, g, h, a, b, c, d, e, K[51], SHA256_SCHED(w3,  w4,  w12, w1));
+        SHA256_ROUND(e, f, g, h, a, b, c, d, K[52], SHA256_SCHED(w4,  w5,  w13, w2));
+        SHA256_ROUND(d, e, f, g, h, a, b, c, K[53], SHA256_SCHED(w5,  w6,  w14, w3));
+        SHA256_ROUND(c, d, e, f, g, h, a, b, K[54], SHA256_SCHED(w6,  w7,  w15, w4));
+        SHA256_ROUND(b, c, d, e, f, g, h, a, K[55], SHA256_SCHED(w7,  w8,  w0,  w5));
+        SHA256_ROUND(a, b, c, d, e, f, g, h, K[56], SHA256_SCHED(w8,  w9,  w1,  w6));
+        SHA256_ROUND(h, a, b, c, d, e, f, g, K[57], SHA256_SCHED(w9,  w10, w2,  w7));
+        SHA256_ROUND(g, h, a, b, c, d, e, f, K[58], SHA256_SCHED(w10, w11, w3,  w8));
+        SHA256_ROUND(f, g, h, a, b, c, d, e, K[59], SHA256_SCHED(w11, w12, w4,  w9));
+        SHA256_ROUND(e, f, g, h, a, b, c, d, K[60], SHA256_SCHED(w12, w13, w5,  w10));
+        SHA256_ROUND(d, e, f, g, h, a, b, c, K[61], SHA256_SCHED(w13, w14, w6,  w11));
+        SHA256_ROUND(c, d, e, f, g, h, a, b, K[62], SHA256_SCHED(w14, w15, w7,  w12));
+        SHA256_ROUND(b, c, d, e, f, g, h, a, K[63], SHA256_SCHED(w15, w0,  w8,  w13));
 
         /*
          * Feed-forward step.  The compressed block result is added into the
