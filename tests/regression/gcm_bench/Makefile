@@ -9,12 +9,27 @@ SRCS := $(SRC_DIR)/main.cpp
 
 GCM_ACCEL_MODE ?= NATIVE
 GCM_BENCH_DISPATCH ?= WARP
+# GCM_BENCH_LAYOUT controls the coalesced-layout experiment (design (1)):
+#   DIRECT    : GCM reads global directly (default; UNPROTECTED/WARP/LANE)
+#   STRIDED   : stage stream to local with stream-major (uncoalesced) global reads
+#   COALESCED : stage stream to local with interleaved (coalesced) global reads
+# STRIDED/COALESCED force per-lane staging and need a crypto mode (NATIVE/SOFTWARE).
+GCM_BENCH_LAYOUT ?= DIRECT
 
 ifeq ($(GCM_BENCH_DISPATCH),LANE)
   CONFIGS += -DGCM_BENCH_DISPATCH_LANE
 else ifeq ($(GCM_BENCH_DISPATCH),WARP)
 else
   $(error unsupported GCM_BENCH_DISPATCH=$(GCM_BENCH_DISPATCH); supported: WARP LANE)
+endif
+
+ifeq ($(GCM_BENCH_LAYOUT),COALESCED)
+  CONFIGS += -DGCM_BENCH_STAGE -DGCM_BENCH_COALESCED
+else ifeq ($(GCM_BENCH_LAYOUT),STRIDED)
+  CONFIGS += -DGCM_BENCH_STAGE
+else ifeq ($(GCM_BENCH_LAYOUT),DIRECT)
+else
+  $(error unsupported GCM_BENCH_LAYOUT=$(GCM_BENCH_LAYOUT); supported: DIRECT STRIDED COALESCED)
 endif
 
 ifeq ($(GCM_ACCEL_MODE),UNPROTECTED)

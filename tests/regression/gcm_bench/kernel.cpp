@@ -28,6 +28,7 @@ struct TaskArgs {
   uint8_t* tags;
   const uint8_t* key;
   uint32_t bytes_per_task;
+  uint32_t num_streams;
 };
 
 void gcm_worker(const TaskArgs* __UNIFORM__ args) {
@@ -62,6 +63,50 @@ void gcm_worker(const TaskArgs* __UNIFORM__ args) {
 #endif
 }
 
+#ifdef GCM_BENCH_STAGE
+// Coalesced-layout experiment (design (1)). Each lane stages its stream from
+// global memory into a local buffer, then runs AES-256-GCM on the local copy.
+// The ONLY variable is the cross-lane global read stride:
+//   STRIDED  : stream s byte k at gmem[s*W + k]            -> lanes stride W (uncoalesced)
+//   COALESCED: stream s byte k at gmem[warp*(NL*W)+k*NL+L] -> lanes stride 1 (coalesced)
+// Both stage the same logical bytes, so the GCM output (tag) is identical ->
+// the per-stream-tag checksum cross-checks the two layouts. Uses hardware ids
+// for stream identity so it does not depend on the spawn task->thread mapping.
+#ifndef GCM_BENCH_MAX_BYTES
+#define GCM_BENCH_MAX_BYTES 1024
+#endif
+void gcm_worker_staged(const TaskArgs* __UNIFORM__ args) {
+  uint32_t NL    = vx_num_threads();
+  uint32_t lane  = vx_thread_id();
+  uint32_t gwarp = (uint32_t)vx_core_id() * (uint32_t)vx_num_warps() + (uint32_t)vx_warp_id();
+  uint32_t s     = gwarp * NL + lane;
+  uint32_t W     = args->bytes_per_task;
+  if (s >= args->num_streams || W > GCM_BENCH_MAX_BYTES)
+    return;
+
+  uint8_t buf[GCM_BENCH_MAX_BYTES];
+  const uint8_t* g = args->data;
+#ifdef GCM_BENCH_COALESCED
+  uint64_t wbase = (uint64_t)gwarp * NL * W;
+  for (uint32_t k = 0; k < W; ++k)
+    buf[k] = g[wbase + (uint64_t)k * NL + lane];   // lanes -> contiguous, coalesced
+#else
+  uint64_t sbase = (uint64_t)s * W;
+  for (uint32_t k = 0; k < W; ++k)
+    buf[k] = g[sbase + k];                         // lanes -> stride W, uncoalesced
+#endif
+
+  uint8_t iv[12];
+  for (int i = 0; i < 8; ++i) iv[i] = 0;
+  iv[8]  = (uint8_t)(s >> 24);
+  iv[9]  = (uint8_t)(s >> 16);
+  iv[10] = (uint8_t)(s >> 8);
+  iv[11] = (uint8_t)(s);
+  // Encrypt in place (GCTR then GHASH(ct)); tag is the per-stream output.
+  aes256_gcm_encrypt(args->key, iv, nullptr, 0, buf, W, buf, args->tags + (uint64_t)s * 16);
+}
+#endif
+
 } // namespace
 
 int main() {
@@ -83,9 +128,14 @@ int main() {
     (uint8_t*)(uintptr_t)arg->tag_addr,
     (const uint8_t*)(uintptr_t)arg->key_addr,
     arg->bytes_per_task,
+    arg->num_tasks,
   };
 
-#ifdef GCM_BENCH_DISPATCH_LANE
+#ifdef GCM_BENCH_STAGE
+  // staged coalesced-layout experiment: always per-lane (LANE) dispatch.
+  vx_spawn_threads(1, &arg->num_tasks, nullptr,
+                   (vx_kernel_func_cb)gcm_worker_staged, &task_args);
+#elif defined(GCM_BENCH_DISPATCH_LANE)
   vx_spawn_threads(1, &arg->num_tasks, nullptr,
                    (vx_kernel_func_cb)gcm_worker, &task_args);
 #else

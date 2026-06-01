@@ -89,12 +89,34 @@ int main(int argc, char** argv) {
             << ", total_bytes=" << total_bytes << std::endl;
 
   std::vector<uint8_t> data(data_bytes);
-  for (uint64_t i = 0; i < data_bytes; ++i)
-    data[i] = (uint8_t)(i * 131u + 0x5Au);
   uint8_t key[32];
   for (int i = 0; i < 32; ++i) key[i] = (uint8_t)(i * 7u + 1u);
 
   RT_CHECK(vx_dev_open(&device));
+
+#ifdef GCM_BENCH_STAGE
+  // Lay out by logical (stream s, byte k) so STRIDED and COALESCED feed the same
+  // logical bytes to each stream's GCM (=> identical tags/checksum). Kernel
+  // identifies its stream by hardware ids as s = gwarp*NL + lane.
+  uint64_t nl64 = 0;
+  RT_CHECK(vx_dev_caps(device, VX_CAPS_NUM_THREADS, &nl64));
+  uint32_t NL = (uint32_t)nl64;
+  for (uint32_t s = 0; s < num_tasks; ++s) {
+    for (uint32_t k = 0; k < bytes_per_task; ++k) {
+      uint8_t v = (uint8_t)(s * 131u + k * 17u + 0x5Au);
+#ifdef GCM_BENCH_COALESCED
+      uint64_t pos = (uint64_t)(s / NL) * NL * bytes_per_task
+                   + (uint64_t)k * NL + (s % NL);
+#else
+      uint64_t pos = (uint64_t)s * bytes_per_task + k;
+#endif
+      data[pos] = v;
+    }
+  }
+#else
+  for (uint64_t i = 0; i < data_bytes; ++i)
+    data[i] = (uint8_t)(i * 131u + 0x5Au);
+#endif
   RT_CHECK(vx_mem_alloc(device, data_bytes, VX_MEM_READ_WRITE, &data_buffer));
   RT_CHECK(vx_mem_address(data_buffer, &kernel_arg.data_addr));
   RT_CHECK(vx_mem_alloc(device, data_bytes, VX_MEM_READ_WRITE, &out_buffer));
