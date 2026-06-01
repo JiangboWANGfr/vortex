@@ -5,12 +5,23 @@
 // accumulator a = (a + block) * r mod (2^130 - 5), a Horner chain in the prime
 // field 2^130-5 -- the structural analogue of GHASH's GF(2^128) Horner chain,
 // which makes it the natural second MAC for the algorithm-agnostic study.
+//
+// With POLY1305_NATIVE defined, the per-block field multiply runs on the
+// hardware Poly1305 PE (VX_crypto_poly1305.sv): SETR loads the clamped key, each
+// full 16-byte block is processed by a BLOCK op, and RD reads back the 5
+// accumulator limbs. The padded final partial block and the final reduce (+s)
+// stay in software -- exactly the limb form the PE produces, so the result is
+// bit-identical to the pure-software path.
 
 #ifndef POLY1305_H
 #define POLY1305_H
 
 #include <stdint.h>
 #include <stddef.h>
+
+#ifdef POLY1305_NATIVE
+#include <vx_intrinsics.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,21 +37,25 @@ static inline void poly_st32(uint8_t* p, uint32_t v) {
   p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
 }
 
-// mac[16] = Poly1305(m[0..len), key[32]).  key = r(16) || s(16).
-static inline void poly1305_mac(uint8_t mac[16], const uint8_t* m, size_t len,
-                                const uint8_t key[32]) {
+// clamp r and split into 26-bit limbs; s[k] = 5*r[k] (s[0] unused).
+static inline void poly1305_keysetup(uint32_t r[5], uint32_t s[5], const uint8_t key[16]) {
   uint32_t t0 = poly_le32(key + 0),  t1 = poly_le32(key + 4);
   uint32_t t2 = poly_le32(key + 8),  t3 = poly_le32(key + 12);
+  r[0] =  t0                       & 0x3ffffff;
+  r[1] = ((t0 >> 26) | (t1 << 6))  & 0x3ffff03;
+  r[2] = ((t1 >> 20) | (t2 << 12)) & 0x3ffc0ff;
+  r[3] = ((t2 >> 14) | (t3 << 18)) & 0x3f03fff;
+  r[4] =  (t3 >> 8)                & 0x00fffff;
+  s[0] = 0;
+  s[1] = r[1] * 5; s[2] = r[2] * 5; s[3] = r[3] * 5; s[4] = r[4] * 5;
+}
 
-  // clamp r and split into 26-bit limbs
-  uint32_t r0 =  t0                       & 0x3ffffff;
-  uint32_t r1 = ((t0 >> 26) | (t1 << 6))  & 0x3ffff03;
-  uint32_t r2 = ((t1 >> 20) | (t2 << 12)) & 0x3ffc0ff;
-  uint32_t r3 = ((t2 >> 14) | (t3 << 18)) & 0x3f03fff;
-  uint32_t r4 =  (t3 >> 8)                & 0x00fffff;
-  uint32_t s1 = r1 * 5, s2 = r2 * 5, s3 = r3 * 5, s4 = r4 * 5;
-
-  uint32_t h0 = 0, h1 = 0, h2 = 0, h3 = 0, h4 = 0;
+// Horner chain: h = (h + block) * r mod (2^130-5) over `len` message bytes.
+static inline void poly1305_blocks(uint32_t h[5], const uint32_t r[5], const uint32_t s[5],
+                                   const uint8_t* m, size_t len) {
+  uint32_t h0 = h[0], h1 = h[1], h2 = h[2], h3 = h[3], h4 = h[4];
+  uint32_t r0 = r[0], r1 = r[1], r2 = r[2], r3 = r[3], r4 = r[4];
+  uint32_t s1 = s[1], s2 = s[2], s3 = s[3], s4 = s[4];
 
   while (len > 0) {
     size_t want = (len < 16) ? len : 16;
@@ -76,7 +91,13 @@ static inline void poly1305_mac(uint8_t mac[16], const uint8_t* m, size_t len,
     len -= want;
   }
 
-  // final carry propagation
+  h[0] = h0; h[1] = h1; h[2] = h2; h[3] = h3; h[4] = h4;
+}
+
+// final carry, freeze mod (2^130-5), pack to 128 bits, add s -> mac.
+static inline void poly1305_finalize(uint8_t mac[16], uint32_t h[5], const uint8_t key[32]) {
+  uint32_t h0 = h[0], h1 = h[1], h2 = h[2], h3 = h[3], h4 = h[4];
+
   uint32_t c;
   c = h1 >> 26; h1 &= 0x3ffffff; h2 += c;
   c = h2 >> 26; h2 &= 0x3ffffff; h3 += c;
@@ -112,6 +133,39 @@ static inline void poly1305_mac(uint8_t mac[16], const uint8_t* m, size_t len,
 
   poly_st32(mac + 0, h0); poly_st32(mac + 4, h1);
   poly_st32(mac + 8, h2); poly_st32(mac + 12, h3);
+}
+
+// mac[16] = Poly1305(m[0..len), key[32]).  key = r(16) || s(16).
+static inline void poly1305_mac(uint8_t mac[16], const uint8_t* m, size_t len,
+                                const uint8_t key[32]) {
+  uint32_t r[5], s[5], h[5] = {0, 0, 0, 0, 0};
+  poly1305_keysetup(r, s, key);
+
+#ifdef POLY1305_NATIVE
+  // load the clamped 128-bit r into the PE (it splits into 26-bit limbs; the
+  // word clamp masks subsume donna's per-limb masks, so plain slicing matches).
+  uint32_t t0 = poly_le32(key + 0), t1 = poly_le32(key + 4);
+  uint32_t t2 = poly_le32(key + 8), t3 = poly_le32(key + 12);
+  uint64_t r_lo = (uint64_t)(t0 & 0x0fffffff) | ((uint64_t)(t1 & 0x0ffffffc) << 32);
+  uint64_t r_hi = (uint64_t)(t2 & 0x0ffffffc) | ((uint64_t)(t3 & 0x0ffffffc) << 32);
+  __intrin_poly1305_setr(r_lo, r_hi);
+
+  // full 16-byte blocks on the PE
+  size_t full = len & ~(size_t)15;
+  for (size_t off = 0; off < full; off += 16) {
+    uint64_t blo = (uint64_t)poly_le32(m + off)     | ((uint64_t)poly_le32(m + off + 4)  << 32);
+    uint64_t bhi = (uint64_t)poly_le32(m + off + 8) | ((uint64_t)poly_le32(m + off + 12) << 32);
+    __intrin_poly1305_block(blo, bhi);
+  }
+
+  // read accumulator limbs back, finish the (padded) tail block in software
+  for (int k = 0; k < 5; ++k) h[k] = (uint32_t)__intrin_poly1305_rd((uint32_t)k);
+  poly1305_blocks(h, r, s, m + full, len - full);
+#else
+  poly1305_blocks(h, r, s, m, len);
+#endif
+
+  poly1305_finalize(mac, h, key);
 }
 
 #ifdef __cplusplus

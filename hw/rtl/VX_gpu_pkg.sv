@@ -296,6 +296,9 @@ package VX_gpu_pkg;
     localparam INST_CRYPTO_GHASH_XOR  = 4'b1001;
     localparam INST_CRYPTO_GHASH_RD   = 4'b1010;
     localparam INST_CRYPTO_GHASH_MUL  = 4'b1011;
+    localparam INST_CRYPTO_POLY_SETR  = 4'b1100;
+    localparam INST_CRYPTO_POLY_BLOCK = 4'b1101;
+    localparam INST_CRYPTO_POLY_RD    = 4'b1110;
 
     localparam CRYPTO_CLASS_BITS = 3;
     localparam CRYPTO_CLASS_AES  = 3'd0;
@@ -303,6 +306,7 @@ package VX_gpu_pkg;
     localparam CRYPTO_CLASS_SM4  = 3'd2;
     localparam CRYPTO_CLASS_MISC = 3'd3;
     localparam CRYPTO_CLASS_GHASH = 3'd4;
+    localparam CRYPTO_CLASS_POLY1305 = 3'd5;
 
     ///////////////////////////////////////////////////////////////////////////
 

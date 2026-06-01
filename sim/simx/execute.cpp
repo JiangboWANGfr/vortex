@@ -1149,6 +1149,61 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
       }
       rd_write = (ghash_type == GhashType::RD);
     },
+    [&](PolyType poly_type) {
+      // Per-lane Poly1305 (radix-2^26, 5 limbs). poly[t] = {r[5], s[5], acc[5]}
+      // (indices 0-4,5-9,10-14). Math is bit-for-bit identical to the donna-32
+      // block loop in poly1305.h and to VX_crypto_poly1305.sv. SETR loads a
+      // pre-clamped r; BLOCK does acc=(acc+block+2^128)*r mod 2^130-5 for a full
+      // 16-byte block; RD reads back an accumulator limb.
+      auto& poly_warp = poly1305_state_.at(wid);
+      for (uint32_t t = thread_start; t < num_threads; ++t) {
+        if (!warp.tmask.test(t))
+          continue;
+        uint64_t* r   = &poly_warp.at(t)[0];
+        uint64_t* s   = &poly_warp.at(t)[5];
+        uint64_t* acc = &poly_warp.at(t)[10];
+        switch (poly_type) {
+        case PolyType::SETR: {
+          unsigned __int128 v = ((unsigned __int128)(uint64_t)rs2_data[t].u << 64)
+                              | (uint64_t)rs1_data[t].u;
+          for (int k = 0; k < 5; ++k) {
+            r[k] = (uint64_t)((v >> (26 * k)) & 0x3ffffff);
+            s[k] = r[k] * 5;
+            acc[k] = 0;
+          }
+        } break;
+        case PolyType::BLOCK: {
+          unsigned __int128 b = ((unsigned __int128)(uint64_t)rs2_data[t].u << 64)
+                              | (uint64_t)rs1_data[t].u;
+          uint64_t h0 = acc[0] + (uint64_t)((b >> 0)   & 0x3ffffff);
+          uint64_t h1 = acc[1] + (uint64_t)((b >> 26)  & 0x3ffffff);
+          uint64_t h2 = acc[2] + (uint64_t)((b >> 52)  & 0x3ffffff);
+          uint64_t h3 = acc[3] + (uint64_t)((b >> 78)  & 0x3ffffff);
+          uint64_t h4 = acc[4] + (uint64_t)((b >> 104) & 0x3ffffff) + (1u << 24); // +2^128
+          uint64_t d0 = h0*r[0] + h1*s[4] + h2*s[3] + h3*s[2] + h4*s[1];
+          uint64_t d1 = h0*r[1] + h1*r[0] + h2*s[4] + h3*s[3] + h4*s[2];
+          uint64_t d2 = h0*r[2] + h1*r[1] + h2*r[0] + h3*s[4] + h4*s[3];
+          uint64_t d3 = h0*r[3] + h1*r[2] + h2*r[1] + h3*r[0] + h4*s[4];
+          uint64_t d4 = h0*r[4] + h1*r[3] + h2*r[2] + h3*r[1] + h4*r[0];
+          uint64_t c;
+          c = d0 >> 26; h0 = d0 & 0x3ffffff; d1 += c;
+          c = d1 >> 26; h1 = d1 & 0x3ffffff; d2 += c;
+          c = d2 >> 26; h2 = d2 & 0x3ffffff; d3 += c;
+          c = d3 >> 26; h3 = d3 & 0x3ffffff; d4 += c;
+          c = d4 >> 26; h4 = d4 & 0x3ffffff; h0 += c * 5;
+          c = h0 >> 26; h0 = h0 & 0x3ffffff; h1 += c;
+          acc[0] = h0; acc[1] = h1; acc[2] = h2; acc[3] = h3; acc[4] = h4;
+        } break;
+        case PolyType::RD: {
+          uint32_t idx = rs1_data[t].u32 & 0x7;
+          rd_data[t].u = Word((uint64_t)acc[idx]);
+        } break;
+        default:
+          std::abort();
+        }
+      }
+      rd_write = (poly_type == PolyType::RD);
+    },
     [&](AesType aes_type) {
       auto aesArgs = std::get<IntrAesArgs>(instrArgs);
       for (uint32_t t = thread_start; t < num_threads; ++t) {

@@ -230,6 +230,15 @@ static op_string_t op_string(const Instr &instr) {
         std::abort();
       }
     },
+    [&](PolyType poly_type)-> op_string_t {
+      switch (poly_type) {
+      case PolyType::SETR:  return {"POLY_SETR", ""};
+      case PolyType::BLOCK: return {"POLY_BLOCK", ""};
+      case PolyType::RD:    return {"POLY_RD", ""};
+      default:
+        std::abort();
+      }
+    },
     [&](FpuType fpu_type)-> op_string_t {
       auto fpuArgs = std::get<IntrFpuArgs>(instrArgs);
       switch (fpu_type) {
@@ -1275,6 +1284,30 @@ decode_integer_alu:
         break;
       case 3:
         instr->setOpType(GhashType::MUL);
+        break;
+      default:
+        std::abort();
+      }
+      ibuffer.push_back(instr);
+    } break;
+    case 5: {
+      auto instr = std::allocate_shared<Instr>(instr_pool_, uuid, FUType::ALU);
+      instr->setArgs(IntrPolyArgs{});
+      switch (funct3) {
+      case 0: // SETR: r = {rs2,rs1}
+        instr->setOpType(PolyType::SETR);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        instr->setSrcReg(1, rs2, RegType::Integer);
+        break;
+      case 1: // BLOCK: acc = (acc + {rs2,rs1} + 2^128) * r mod p
+        instr->setOpType(PolyType::BLOCK);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        instr->setSrcReg(1, rs2, RegType::Integer);
+        break;
+      case 2: // RD: rd = acc_limb[rs1]
+        instr->setOpType(PolyType::RD);
+        instr->setDestReg(rd, RegType::Integer);
+        instr->setSrcReg(0, rs1, RegType::Integer);
         break;
       default:
         std::abort();

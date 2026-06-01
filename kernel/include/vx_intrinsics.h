@@ -334,6 +334,27 @@ static inline void __intrin_ghash_mul(void) {
 }
 #endif
 
+// Poly1305 one-time-MAC PE: custom-0 opcode (0x0b), funct7 = 0x05.
+//   funct3: 0=SETR (r={rs2,rs1}, clamped), 1=BLOCK (acc=(acc+{rs2,rs1}+2^128)*r),
+//           2=RD (rd=acc_limb[rs1]).
+// SETR/BLOCK take the 128-bit operand as two XLEN halves (lo=rs1, hi=rs2);
+// RD's rs1 selects the limb (0..4). RV64 only.
+#ifdef XLEN_64
+static inline void __intrin_poly1305_setr(uint64_t lo, uint64_t hi) {
+    __asm__ volatile (".insn r 0x0b, 0, 0x05, x0, %0, %1" :: "r"(lo), "r"(hi));
+}
+
+static inline void __intrin_poly1305_block(uint64_t lo, uint64_t hi) {
+    __asm__ volatile (".insn r 0x0b, 1, 0x05, x0, %0, %1" :: "r"(lo), "r"(hi));
+}
+
+static inline uint64_t __intrin_poly1305_rd(uint32_t limb) {
+    uint64_t rd;
+    __asm__ volatile (".insn r 0x0b, 2, 0x05, %0, %1, x0" : "=r"(rd) : "r"(limb));
+    return rd;
+}
+#endif
+
 static inline uint32_t __intrin_sha256sig0(uint32_t rs1) {
     uint32_t rd;
     __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x102" : "=r"(rd) : "r"(rs1));

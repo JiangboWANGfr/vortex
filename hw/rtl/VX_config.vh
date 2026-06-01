@@ -920,6 +920,12 @@
     `define EXT_GHASH_ENABLED 0
 `endif
 
+`ifdef EXT_POLY1305_ENABLE
+    `define EXT_POLY1305_ENABLED 1
+`else
+    `define EXT_POLY1305_ENABLED 0
+`endif
+
 `ifdef EXT_TCU_ENABLE
     `define EXT_TCU_ENABLED 1
 `else

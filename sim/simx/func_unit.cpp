@@ -161,6 +161,21 @@ void AluUnit::tick() {
 					std::abort();
 				}
 				DT(3, this->name() << ": op=" << ghash_type << ", " << *trace);
+		} else if (std::get_if<PolyType>(&trace->op_type)) {
+				auto poly_type = std::get<PolyType>(trace->op_type);
+				switch (poly_type) {
+				case PolyType::SETR:
+				case PolyType::RD:
+					delay = 2;
+					break;
+				case PolyType::BLOCK:
+					// sequential 5x5 schoolbook (25 products) + carry/fold + accept/resp
+					delay = 25 + 2;
+					break;
+				default:
+					std::abort();
+				}
+				DT(3, this->name() << ": op=" << poly_type << ", " << *trace);
 		} else {
 			std::abort();
 		}

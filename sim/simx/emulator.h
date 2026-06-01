@@ -154,6 +154,9 @@ private:
   // GHASH state per warp PER THREAD (one independent chain per lane):
   // [warp][thread] = {H, Y} as 128-bit big-endian integers (byte 0 = MSB).
   std::vector<std::vector<std::array<unsigned __int128, 2>>> ghash_state_;
+  // Poly1305 state per warp PER THREAD (radix-2^26, 5 limbs each), layout
+  // [warp][thread] = {r[0..4], s[0..4], acc[0..4]} (indices 0-4,5-9,10-14).
+  std::vector<std::vector<std::array<uint64_t, 15>>> poly1305_state_;
   std::unordered_map<int, std::stringstream> print_bufs_;
   MemoryUnit  mmu_;
   uint32_t    ipdom_size_;

@@ -218,6 +218,14 @@ package VX_trace_pkg;
                         default:                `TRACE(level, ("?"))
                     endcase
                 end
+                CRYPTO_CLASS_POLY1305: begin
+                    case (INST_ALU_BITS'(op_type))
+                        INST_CRYPTO_POLY_SETR:  `TRACE(level, ("POLY1305.SETR"))
+                        INST_CRYPTO_POLY_BLOCK: `TRACE(level, ("POLY1305.BLOCK"))
+                        INST_CRYPTO_POLY_RD:    `TRACE(level, ("POLY1305.RD"))
+                        default:                `TRACE(level, ("?"))
+                    endcase
+                end
                 default: `TRACE(level, ("?"))
             endcase
         end

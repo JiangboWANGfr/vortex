@@ -81,6 +81,8 @@ Emulator::Emulator(const Arch &arch, const DCRS &dcrs, Core* core)
     , keccak_state_(arch.num_warps())
     , ghash_state_(arch.num_warps(),
                    std::vector<std::array<unsigned __int128, 2>>(arch.num_threads()))
+    , poly1305_state_(arch.num_warps(),
+                   std::vector<std::array<uint64_t, 15>>(arch.num_threads()))
     , ipdom_size_(arch.num_threads()-1)
   #ifdef EXT_TCU_ENABLE
     , tensor_unit_(core->tensor_unit())
@@ -121,6 +123,12 @@ void Emulator::reset() {
   }
 
   for (auto& warp_state : ghash_state_) {
+    for (auto& state : warp_state) {
+      state.fill(0);
+    }
+  }
+
+  for (auto& warp_state : poly1305_state_) {
     for (auto& state : warp_state) {
       state.fill(0);
     }
