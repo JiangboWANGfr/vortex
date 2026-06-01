@@ -1,0 +1,216 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+if [[ -f "$SCRIPT_DIR/runner_common.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh"
+else
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh.in"
+fi
+
+show_usage() {
+    cat <<EOF
+Vortex GHASH Benchmark Runner
+
+Runs the warp-affine GHASH throughput benchmark across a SOFTWARE/NATIVE
+matrix and writes a TSV (with cycles_speedup) under runner_output/ghash_bench.
+Each task is one independent GHASH stream pinned to a warp, so parallelism
+comes from warps x cores. SOFTWARE and NATIVE run identical dispatch and
+differ only in the GF(2^128) implementation, so cycles_speedup is a direct
+hardware-vs-software measurement.
+
+Usage:
+  $0 [options]
+
+Options:
+  --driver=<simx|rtlsim|de10pro>    Backend driver (default: simx)
+  --accel-modes=<list>              Comma-separated modes (default: SOFTWARE,NATIVE)
+  --tasks=<n>                       Independent GHASH streams / warps (default: 32)
+  --blocks=<n>                      16-byte blocks per stream (default: 64)
+  --output-root=<path>              Output root (default: <build>/runner_output)
+  --results=<path>                  TSV output path (default: <output-root>/ghash_bench/results/<driver>/results.tsv)
+  --log-dir=<path>                  Run log directory (default: <output-root>/ghash_bench/logs/<driver>)
+  --startup-addr=<hex>              Kernel startup address (default: XLEN-specific)
+  --ext-f-disable                   Build with EXT_F_DISABLE=1
+  --ext-d-disable                   Build with EXT_D_DISABLE=1
+  --fd-disable                      Shorthand for both ext-f-disable and ext-d-disable
+  --debug=<level>                   Debug level passed to simulators (default: 0)
+  --help                            Show this help
+
+Supported GHASH_ACCEL_MODE values:
+  SOFTWARE, NATIVE
+
+Examples:
+  $0 --driver=simx --accel-modes=SOFTWARE,NATIVE --tasks=32 --blocks=64 --fd-disable
+  $0 --driver=rtlsim --accel-modes=NATIVE --tasks=32 --blocks=16 --fd-disable
+EOF
+}
+
+validate_accel_mode() {
+    case "$1" in
+        SOFTWARE|NATIVE) ;;
+        *) die "unsupported GHASH_ACCEL_MODE=$1; supported: SOFTWARE NATIVE" ;;
+    esac
+}
+
+driver_configs() {
+    local need_native="$1"
+    # The hardware GHASH PE is compiled into the simulator only with
+    # -DEXT_GHASH_ENABLE; SOFTWARE runs tolerate its presence, so build the
+    # driver once with the PE when any requested mode is NATIVE.
+    if [[ "$need_native" -eq 1 ]]; then
+        printf '%s\n' "CONFIGS=-DEXT_GHASH_ENABLE"
+    fi
+}
+
+build_driver_runtime() {
+    local need_native="$1"
+    local args=()
+    while IFS= read -r flag; do
+        [[ -n "$flag" ]] && args+=("$flag")
+    done < <(driver_configs "$need_native")
+    build_driver_runtime_common "$DRIVER" 5000 "${args[@]}"
+}
+
+extract_field() {
+    local pattern="$1"
+    local file="$2"
+    grep -a "^GHASH_BENCH: .*${pattern}=" "$file" | tail -n 1 \
+        | sed -nE "s/.*${pattern}=([0-9,]+).*/\\1/p" | tr -d ',' || true
+}
+
+extract_perf() {
+    local file="$1"
+    local line
+    line=$(grep -a 'PERF: instrs=' "$file" | tail -n 1 || true)
+    if [[ -z "$line" ]]; then
+        printf '\t\t'
+        return
+    fi
+    printf '%s' "$line" \
+        | sed -E 's/.*instrs=([0-9,]+), cycles=([0-9,]+), IPC=([0-9.]+).*/\1\t\2\t\3/' | tr -d ','
+}
+
+main() {
+    RUNNER_NAME="ghash_bench"
+    DRIVER="simx"
+    STARTUP_ADDR=""
+    EXT_F_DISABLE=0
+    EXT_D_DISABLE=0
+    DEBUG_LEVEL=0
+    TASKS="32"
+    BLOCKS="64"
+    OUTPUT_ROOT="$ROOT_DIR/runner_output"
+    RESULTS=""
+    LOG_DIR=""
+    accel_mode_list="SOFTWARE,NATIVE"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --driver=*) DRIVER="${1#*=}" ;;
+            --accel-modes=*) accel_mode_list="${1#*=}" ;;
+            --tasks=*) TASKS="${1#*=}" ;;
+            --blocks=*) BLOCKS="${1#*=}" ;;
+            --output-root=*) OUTPUT_ROOT="${1#*=}" ;;
+            --results=*) RESULTS="${1#*=}" ;;
+            --log-dir=*) LOG_DIR="${1#*=}" ;;
+            --startup-addr=*) STARTUP_ADDR="${1#*=}" ;;
+            --ext-f-disable) EXT_F_DISABLE=1 ;;
+            --ext-d-disable) EXT_D_DISABLE=1 ;;
+            --fd-disable) EXT_F_DISABLE=1; EXT_D_DISABLE=1 ;;
+            --debug=*) DEBUG_LEVEL="${1#*=}" ;;
+            --help|-h) show_usage; exit 0 ;;
+            *) die "unknown option: $1" ;;
+        esac
+        shift
+    done
+
+    IFS=',' read -r -a ACCEL_MODES <<< "$accel_mode_list"
+
+    local need_native=0 mode
+    for mode in "${ACCEL_MODES[@]}"; do
+        validate_accel_mode "$mode"
+        [[ "$mode" == "NATIVE" ]] && need_native=1
+    done
+
+    load_xlen
+    set_default_startup_addr
+    source_toolchain_env
+    init_single_driver_output
+
+    echo "ROOT_DIR=$ROOT_DIR"
+    echo "OUTPUT_ROOT=$OUTPUT_ROOT"
+    echo "XLEN=$XLEN"
+    echo "DRIVER=$DRIVER"
+    echo "ACCEL_MODES=${ACCEL_MODES[*]}"
+    echo "TASKS=$TASKS"
+    echo "BLOCKS=$BLOCKS"
+    echo "RESULTS=$RESULTS"
+
+    run_cmd make -C "$ROOT_DIR/hw" config
+    build_kernel
+    build_driver_runtime "$need_native"
+
+    local app_dir="$ROOT_DIR/tests/regression/ghash_bench"
+    local failures=0
+
+    # Defer TSV emission until SOFTWARE baselines are known for cycles_speedup.
+    local -a rows=()
+    declare -A software_cycles=()
+
+    for mode in "${ACCEL_MODES[@]}"; do
+        local build_args=("make" "-C" "$app_dir" "clean" "all"
+                          "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR" "GHASH_ACCEL_MODE=$mode")
+        while IFS= read -r flag; do
+            [[ -n "$flag" ]] && build_args+=("$flag")
+        done < <(join_flags)
+        run_cmd "${build_args[@]}"
+
+        local log_file="$LOG_DIR/ghash-bench-${mode}-${DRIVER}.log"
+        local status
+        if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$DRIVER" \
+                "GHASH_ACCEL_MODE=$mode" "OPTS=-t $TASKS -n $BLOCKS" >"$log_file" 2>&1; then
+            status="PASS"
+        else
+            status="FAIL"
+            failures=$((failures + 1))
+        fi
+
+        local num_tasks blocks_per_task total_blocks total_bytes perf instrs cycles ipc row_key
+        num_tasks=$(extract_field "num_tasks" "$log_file")
+        blocks_per_task=$(extract_field "blocks_per_task" "$log_file")
+        total_blocks=$(extract_field "total_blocks" "$log_file")
+        total_bytes=$(extract_field "total_bytes" "$log_file")
+        perf=$(extract_perf "$log_file")
+        IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
+        row_key="$DRIVER|${num_tasks:-$TASKS}|${blocks_per_task:-$BLOCKS}"
+        if [[ "$mode" == "SOFTWARE" && -n "$cycles" ]]; then
+            software_cycles["$row_key"]="$cycles"
+        fi
+
+        rows+=("$mode"$'\t'"$DRIVER"$'\t'"$(format_number "${num_tasks:-$TASKS}")"$'\t'"$(format_number "${blocks_per_task:-$BLOCKS}")"$'\t'"$(format_number "$total_blocks")"$'\t'"$(format_number "$total_bytes")"$'\t'"$instrs"$'\t'"$cycles"$'\t'"$ipc"$'\t'"$status"$'\t'"$log_file"$'\t'"$row_key")
+    done
+
+    printf 'algo\taccel_mode\tdriver\tnum_tasks\tblocks_per_task\ttotal_blocks\ttotal_bytes\tinstrs\tcycles\tcycles_speedup\tipc\tstatus\tlog\n' > "$RESULTS"
+    local row
+    for row in "${rows[@]}"; do
+        IFS=$'\t' read -r mode driver num_tasks blocks_per_task total_blocks total_bytes instrs cycles ipc status log_file row_key <<< "$row"
+        local speedup=""
+        if [[ "$mode" == "SOFTWARE" && -n "$cycles" ]]; then
+            speedup="1x"
+        elif [[ -n "$row_key" && -n "${software_cycles[$row_key]:-}" && -n "$cycles" ]]; then
+            speedup=$(format_speedup "${software_cycles[$row_key]}" "$cycles")
+        fi
+        printf 'ghash\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$mode" "$driver" "$num_tasks" "$blocks_per_task" "$total_blocks" "$total_bytes" \
+            "$instrs" "$cycles" "$speedup" "$ipc" "$status" "$log_file" >> "$RESULTS"
+    done
+
+    echo "GHASH bench results written to $RESULTS"
+    [[ "$failures" -eq 0 ]]
+}
+
+main "$@"
