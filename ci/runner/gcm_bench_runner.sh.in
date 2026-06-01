@@ -1,0 +1,248 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+if [[ -f "$SCRIPT_DIR/runner_common.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh"
+else
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh.in"
+fi
+
+show_usage() {
+    cat <<EOF
+Vortex AES-256-GCM Benchmark Runner (confidential-ML, scenario A)
+
+Runs the end-to-end AES-256-GCM throughput benchmark across an
+accel-mode x dispatch matrix and writes a TSV with throughput and the
+confidentiality overhead relative to the UNPROTECTED data-movement baseline.
+
+Accel modes:
+  UNPROTECTED : move the buffer only (no crypto) -- all-reduce baseline
+  SOFTWARE    : software AES-256-GCM
+  NATIVE      : hardware AES rounds + hardware GHASH AES-256-GCM
+Dispatch:
+  WARP : one stream per warp (one active thread)
+  LANE : one stream per thread (multi-chain, all lanes active)
+
+Derived columns: cyc_per_byte, gbps_1ghz (bytes/cycle), overhead_x
+(cycles / UNPROTECTED cycles for the same dispatch/size), native_speedup
+(SOFTWARE cycles / NATIVE cycles). SOFTWARE and NATIVE must report the same
+checksum (correctness cross-check).
+
+Usage:
+  $0 [options]
+
+Options:
+  --driver=<simx|rtlsim|de10pro>    Backend driver (default: simx)
+  --accel-modes=<list>              (default: UNPROTECTED,SOFTWARE,NATIVE)
+  --dispatch=<list>                 (default: WARP,LANE)
+  --tasks=<n>                       Independent GCM streams (default: 32)
+  --bytes=<n>                       Bytes per stream, multiple of 16 (default: 1024)
+  --output-root=<path>              Output root (default: <build>/runner_output)
+  --results=<path>                  TSV path (default: <output-root>/gcm_bench/results/<driver>/results.tsv)
+  --log-dir=<path>                  Log dir (default: <output-root>/gcm_bench/logs/<driver>)
+  --startup-addr=<hex>              Kernel startup address
+  --ext-f-disable / --ext-d-disable / --fd-disable
+  --debug=<level>                   (default: 0)
+  --help
+
+Example:
+  $0 --driver=simx --tasks=32 --bytes=1024 --fd-disable
+EOF
+}
+
+validate_accel_mode() {
+    case "$1" in
+        UNPROTECTED|SOFTWARE|NATIVE) ;;
+        *) die "unsupported GCM_ACCEL_MODE=$1; supported: UNPROTECTED SOFTWARE NATIVE" ;;
+    esac
+}
+
+validate_dispatch() {
+    case "$1" in
+        WARP|LANE) ;;
+        *) die "unsupported GCM_BENCH_DISPATCH=$1; supported: WARP LANE" ;;
+    esac
+}
+
+driver_configs() {
+    local need_native="$1"
+    if [[ "$need_native" -eq 1 ]]; then
+        printf '%s\n' "CONFIGS=-DEXT_AES_ENABLE -DEXT_GHASH_ENABLE"
+    fi
+}
+
+build_driver_runtime() {
+    local need_native="$1"
+    local args=()
+    while IFS= read -r flag; do
+        [[ -n "$flag" ]] && args+=("$flag")
+    done < <(driver_configs "$need_native")
+    build_driver_runtime_common "$DRIVER" 5000 "${args[@]}"
+}
+
+extract_field() {
+    local pattern="$1"
+    local file="$2"
+    grep -a "^GCM_BENCH: .*${pattern}=" "$file" | tail -n 1 \
+        | sed -nE "s/.*${pattern}=([0-9a-fx]+).*/\\1/p" | tr -d ',' || true
+}
+
+extract_perf() {
+    local file="$1"
+    local line
+    line=$(grep -a 'PERF: instrs=' "$file" | tail -n 1 || true)
+    if [[ -z "$line" ]]; then
+        printf '\t\t'
+        return
+    fi
+    printf '%s' "$line" \
+        | sed -E 's/.*instrs=([0-9,]+), cycles=([0-9,]+), IPC=([0-9.]+).*/\1\t\2\t\3/' | tr -d ','
+}
+
+# ratio a/b as "N.NNx" (empty on bad input)
+ratio_x() {
+    local a="$1" b="$2"
+    [[ -z "$a" || -z "$b" || "$b" == "0" ]] && { printf ''; return; }
+    perl -e 'printf("%.2fx", $ARGV[0]/$ARGV[1]);' "$a" "$b"
+}
+
+# a/b as plain float with given decimals
+ratio_f() {
+    local a="$1" b="$2" d="$3"
+    [[ -z "$a" || -z "$b" || "$b" == "0" ]] && { printf ''; return; }
+    perl -e 'printf("%.*f", $ARGV[2], $ARGV[0]/$ARGV[1]);' "$a" "$b" "$d"
+}
+
+main() {
+    RUNNER_NAME="gcm_bench"
+    DRIVER="simx"
+    STARTUP_ADDR=""
+    EXT_F_DISABLE=0
+    EXT_D_DISABLE=0
+    DEBUG_LEVEL=0
+    TASKS="32"
+    BYTES="1024"
+    OUTPUT_ROOT="$ROOT_DIR/runner_output"
+    RESULTS=""
+    LOG_DIR=""
+    accel_mode_list="UNPROTECTED,SOFTWARE,NATIVE"
+    dispatch_list="WARP,LANE"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --driver=*) DRIVER="${1#*=}" ;;
+            --accel-modes=*) accel_mode_list="${1#*=}" ;;
+            --dispatch=*) dispatch_list="${1#*=}" ;;
+            --tasks=*) TASKS="${1#*=}" ;;
+            --bytes=*) BYTES="${1#*=}" ;;
+            --output-root=*) OUTPUT_ROOT="${1#*=}" ;;
+            --results=*) RESULTS="${1#*=}" ;;
+            --log-dir=*) LOG_DIR="${1#*=}" ;;
+            --startup-addr=*) STARTUP_ADDR="${1#*=}" ;;
+            --ext-f-disable) EXT_F_DISABLE=1 ;;
+            --ext-d-disable) EXT_D_DISABLE=1 ;;
+            --fd-disable) EXT_F_DISABLE=1; EXT_D_DISABLE=1 ;;
+            --debug=*) DEBUG_LEVEL="${1#*=}" ;;
+            --help|-h) show_usage; exit 0 ;;
+            *) die "unknown option: $1" ;;
+        esac
+        shift
+    done
+
+    IFS=',' read -r -a ACCEL_MODES <<< "$accel_mode_list"
+    IFS=',' read -r -a DISPATCHES <<< "$dispatch_list"
+
+    local need_native=0 mode dispatch
+    for mode in "${ACCEL_MODES[@]}"; do
+        validate_accel_mode "$mode"
+        [[ "$mode" == "NATIVE" ]] && need_native=1
+    done
+    for dispatch in "${DISPATCHES[@]}"; do validate_dispatch "$dispatch"; done
+
+    load_xlen
+    set_default_startup_addr
+    source_toolchain_env
+    init_single_driver_output
+
+    echo "ROOT_DIR=$ROOT_DIR"
+    echo "OUTPUT_ROOT=$OUTPUT_ROOT"
+    echo "XLEN=$XLEN"
+    echo "DRIVER=$DRIVER"
+    echo "ACCEL_MODES=${ACCEL_MODES[*]}"
+    echo "DISPATCHES=${DISPATCHES[*]}"
+    echo "TASKS=$TASKS BYTES=$BYTES"
+    echo "RESULTS=$RESULTS"
+
+    run_cmd make -C "$ROOT_DIR/hw" config
+    build_kernel
+    build_driver_runtime "$need_native"
+
+    local app_dir="$ROOT_DIR/tests/regression/gcm_bench"
+    local failures=0
+    local -a rows=()
+    declare -A unprot_cycles=()
+    declare -A soft_cycles=()
+
+    for mode in "${ACCEL_MODES[@]}"; do
+        for dispatch in "${DISPATCHES[@]}"; do
+            local build_args=("make" "-C" "$app_dir" "clean" "all"
+                              "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR"
+                              "GCM_ACCEL_MODE=$mode" "GCM_BENCH_DISPATCH=$dispatch")
+            while IFS= read -r flag; do
+                [[ -n "$flag" ]] && build_args+=("$flag")
+            done < <(join_flags)
+            run_cmd "${build_args[@]}"
+
+            local log_file="$LOG_DIR/gcm-bench-${mode}-${dispatch}-${DRIVER}.log"
+            local status
+            if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$DRIVER" \
+                    "GCM_ACCEL_MODE=$mode" "GCM_BENCH_DISPATCH=$dispatch" \
+                    "OPTS=-t $TASKS -n $BYTES" >"$log_file" 2>&1; then
+                status="PASS"
+            else
+                status="FAIL"
+                failures=$((failures + 1))
+            fi
+
+            local total_bytes checksum perf instrs cycles ipc key
+            total_bytes=$(extract_field "total_bytes" "$log_file")
+            checksum=$(extract_field "checksum" "$log_file")
+            perf=$(extract_perf "$log_file")
+            IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
+            key="$DRIVER|$dispatch|$TASKS|$BYTES"
+            [[ "$mode" == "UNPROTECTED" && -n "$cycles" ]] && unprot_cycles["$key"]="$cycles"
+            [[ "$mode" == "SOFTWARE"    && -n "$cycles" ]] && soft_cycles["$key"]="$cycles"
+
+            rows+=("$mode"$'\t'"$dispatch"$'\t'"$DRIVER"$'\t'"$TASKS"$'\t'"$BYTES"$'\t'"${total_bytes:-}"$'\t'"$cycles"$'\t'"$ipc"$'\t'"${checksum:-}"$'\t'"$status"$'\t'"$key"$'\t'"$log_file")
+        done
+    done
+
+    printf 'algo\taccel_mode\tdispatch\tdriver\tnum_tasks\tbytes_per_task\ttotal_bytes\tcycles\tcyc_per_byte\tgbps_1ghz\toverhead_x\tnative_speedup\tipc\tchecksum\tstatus\tlog\n' > "$RESULTS"
+    local row
+    for row in "${rows[@]}"; do
+        IFS=$'\t' read -r mode dispatch driver tasks bytes total_bytes cycles ipc checksum status key log_file <<< "$row"
+        local cpb="" gbps="" overhead="" nspeedup=""
+        if [[ -n "$cycles" && -n "$total_bytes" ]]; then
+            cpb=$(ratio_f "$cycles" "$total_bytes" 3)
+            gbps=$(ratio_f "$total_bytes" "$cycles" 4)
+        fi
+        if [[ -n "$cycles" && -n "${unprot_cycles[$key]:-}" ]]; then
+            overhead=$(ratio_x "$cycles" "${unprot_cycles[$key]}")
+        fi
+        if [[ "$mode" == "NATIVE" && -n "$cycles" && -n "${soft_cycles[$key]:-}" ]]; then
+            nspeedup=$(ratio_x "${soft_cycles[$key]}" "$cycles")
+        fi
+        printf 'gcm\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$mode" "$dispatch" "$driver" "$tasks" "$bytes" "$total_bytes" \
+            "$cycles" "$cpb" "$gbps" "$overhead" "$nspeedup" "$ipc" "$checksum" "$status" "$log_file" >> "$RESULTS"
+    done
+
+    echo "GCM bench results written to $RESULTS"
+    [[ "$failures" -eq 0 ]]
+}
+
+main "$@"
