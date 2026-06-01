@@ -1,0 +1,4 @@
+suite,what,cases,result
+ghash_smoke,GF(2^128) algebraic identities,8,"PASS (sw+native, simx+rtlsim)"
+aes_gcm_smoke,NIST AES-256-GCM TC13-16,4,"PASS (sw+native, simx+rtlsim)"
+gcm_bench,sw vs native tag checksum,all,MATCH (bit-exact)

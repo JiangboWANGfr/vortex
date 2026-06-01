@@ -1,0 +1,49 @@
+\begin{table}[t]
+\centering
+\caption{AES-256-GCM throughput and confidentiality overhead vs the unprotected data-movement baseline (32 KB, simx).}
+\label{tab:gcm_overhead}
+\begin{tabular}{llllllll}
+\toprule
+accel\_mode & dispatch & total\_bytes & cycles & cyc\_per\_byte & overhead\_x & native\_speedup & status \\
+\midrule
+UNPROTECTED & WARP & 32768 & 534359 & 16.307 & 1.00$\times$ &  & PASS \\
+UNPROTECTED & LANE & 32768 & 655440 & 20.002 & 1.00$\times$ &  & PASS \\
+SOFTWARE & WARP & 32768 & 159471158 & 4866.674 & 298.43$\times$ &  & PASS \\
+SOFTWARE & LANE & 32768 & 193756669 & 5912.984 & 295.61$\times$ &  & PASS \\
+NATIVE & WARP & 32768 & 989392 & 30.194 & 1.85$\times$ & 161.18$\times$ & PASS \\
+NATIVE & LANE & 32768 & 1666012 & 50.843 & 2.54$\times$ & 116.30$\times$ & PASS \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{GHASH digit-serial multiplier design-space: MUL latency vs total cycles (NATIVE, LANE, 32 KB, simx). Flat = not MUL-bound.}
+\label{tab:ghash_design_space}
+\begin{tabular}{lllllll}
+\toprule
+mul\_radix & mul\_cycles & total\_bytes & cycles & cyc\_per\_byte & ipc & status \\
+\midrule
+1 & 130 & 32,768 & 110612 & 3.38 & 1.008480 & PASS \\
+2 & 66 & 32,768 & 108226 & 3.3 & 1.030714 & PASS \\
+8 & 18 & 32,768 & 108113 & 3.3 & 1.031791 & PASS \\
+32 & 6 & 32,768 & 110334 & 3.37 & 1.011021 & PASS \\
+128 & 3 & 32,768 & 107388 & 3.28 & 1.038757 & PASS \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Functional verification summary.}
+\label{tab:correctness}
+\begin{tabular}{llll}
+\toprule
+suite & what & cases & result \\
+\midrule
+ghash\_smoke & GF(2^128) algebraic identities & 8 & PASS (sw+native, sim$\times$+rtlsim) \\
+aes\_gcm\_smoke & NIST AES-256-GCM TC13-16 & 4 & PASS (sw+native, sim$\times$+rtlsim) \\
+gcm\_bench & sw vs native tag checksum & all & MATCH (bit-e$\times$act) \\
+\bottomrule
+\end{tabular}
+\end{table}
