@@ -355,6 +355,23 @@ static inline uint64_t __intrin_poly1305_rd(uint32_t limb) {
 }
 #endif
 
+// ChaCha20 stream-cipher PE: custom-0 opcode (0x0b), funct7 = 0x06.
+//   funct3: 0=WR (state[rs2[3:0]]=rs1), 1=BLOCK (permute+feedforward), 2=RD.
+// Words are 32-bit; byte order and the counter stay in software. RV32/RV64.
+static inline void __intrin_chacha_wr(uint32_t word_idx, uint32_t data) {
+    __asm__ volatile (".insn r 0x0b, 0, 0x06, x0, %0, %1" :: "r"(data), "r"(word_idx));
+}
+
+static inline void __intrin_chacha_block(void) {
+    __asm__ volatile (".insn r 0x0b, 1, 0x06, x0, x0, x0");
+}
+
+static inline uint32_t __intrin_chacha_rd(uint32_t word_idx) {
+    uint32_t rd;
+    __asm__ volatile (".insn r 0x0b, 2, 0x06, %0, %1, x0" : "=r"(rd) : "r"(word_idx));
+    return rd;
+}
+
 static inline uint32_t __intrin_sha256sig0(uint32_t rs1) {
     uint32_t rd;
     __asm__ volatile (".insn i 0x13, 1, %0, %1, 0x102" : "=r"(rd) : "r"(rs1));

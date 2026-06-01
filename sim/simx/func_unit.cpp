@@ -176,6 +176,25 @@ void AluUnit::tick() {
 					std::abort();
 				}
 				DT(3, this->name() << ": op=" << poly_type << ", " << *trace);
+		} else if (std::get_if<ChaChaType>(&trace->op_type)) {
+				auto chacha_type = std::get<ChaChaType>(trace->op_type);
+				switch (chacha_type) {
+				case ChaChaType::WR:
+				case ChaChaType::RD:
+					delay = 2;
+					break;
+				case ChaChaType::BLOCK:
+					// time-multiplexed quarter-round permute: 80/RADIX cycles + accept/resp
+#ifdef CHACHA_QR_RADIX
+					delay = (80 / CHACHA_QR_RADIX) + 2;
+#else
+					delay = 82;
+#endif
+					break;
+				default:
+					std::abort();
+				}
+				DT(3, this->name() << ": op=" << chacha_type << ", " << *trace);
 		} else {
 			std::abort();
 		}

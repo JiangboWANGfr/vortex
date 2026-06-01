@@ -11,6 +11,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef CHACHA20_NATIVE
+#include <vx_intrinsics.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,6 +48,13 @@ static inline void chacha20_block(const uint8_t key[32], uint32_t counter,
   st[12] = counter;
   for (int i = 0; i < 3; ++i) st[13 + i] = cc20_le32(nonce + 4 * i);
 
+#ifdef CHACHA20_NATIVE
+  // Hardware ChaCha PE: load the 16 words, run permute+feedforward, read back.
+  // The PE returns post-feedforward keystream words; byte order stays in SW.
+  for (int i = 0; i < 16; ++i) __intrin_chacha_wr((uint32_t)i, st[i]);
+  __intrin_chacha_block();
+  for (int i = 0; i < 16; ++i) cc20_st32(out + 4 * i, __intrin_chacha_rd((uint32_t)i));
+#else
   uint32_t x[16];
   for (int i = 0; i < 16; ++i) x[i] = st[i];
   for (int i = 0; i < 10; ++i) {
@@ -57,6 +68,7 @@ static inline void chacha20_block(const uint8_t key[32], uint32_t counter,
     CC20_QR(x[3], x[4], x[9],  x[14])
   }
   for (int i = 0; i < 16; ++i) cc20_st32(out + 4 * i, x[i] + st[i]);
+#endif
 }
 
 // Encrypt/decrypt len bytes with the keystream starting at block counter0.

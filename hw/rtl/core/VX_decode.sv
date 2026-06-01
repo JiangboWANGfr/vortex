@@ -681,6 +681,34 @@ module VX_decode import VX_gpu_pkg::*; #(
                         endcase
                     end
                 `endif
+                `ifdef EXT_CHACHA_ENABLE
+                    7'h06: begin // ChaCha20 custom extension
+                        ex_type = EX_CRYPTO;
+                        op_args.crypto.unit = CRYPTO_CLASS_CHACHA;
+                        op_args.crypto.byte_select = '0;
+                        op_args.crypto.round_imm = '0;
+                        case (funct3)
+                            3'h0: begin // WR: state[rs2[3:0]] = rs1
+                                op_type = INST_OP_BITS'(INST_CRYPTO_CHACHA_WR);
+                                `USED_IREG (rs1);
+                                `USED_IREG (rs2);
+                            end
+                            3'h1: begin // BLOCK: permute + feedforward
+                                op_type = INST_OP_BITS'(INST_CRYPTO_CHACHA_BLOCK);
+                            end
+                            3'h2: begin // RD: rd = state[rs1[3:0]]
+                                op_type = INST_OP_BITS'(INST_CRYPTO_CHACHA_RD);
+                                `USED_IREG (rd);
+                                `USED_IREG (rs1);
+                            end
+                            default: begin
+                                ex_type = 'x;
+                                op_type = 'x;
+                                op_args = 'x;
+                            end
+                        endcase
+                    end
+                `endif
                 `ifdef EXT_TCU_ENABLE
                     7'h02: begin
                         case (funct3)

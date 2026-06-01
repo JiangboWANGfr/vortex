@@ -435,6 +435,28 @@ inline std::ostream &operator<<(std::ostream &os, const PolyType& type) {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+enum class ChaChaType {
+  WR,
+  BLOCK,
+  RD
+};
+
+struct IntrChaChaArgs {
+};
+
+inline std::ostream &operator<<(std::ostream &os, const ChaChaType& type) {
+  switch (type) {
+  case ChaChaType::WR:    os << "CHACHA_WR"; break;
+  case ChaChaType::BLOCK: os << "CHACHA_BLOCK"; break;
+  case ChaChaType::RD:    os << "CHACHA_RD"; break;
+  default:
+    assert(false);
+  }
+  return os;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 enum class LsuType {
   LOAD,
   STORE,
@@ -803,6 +825,7 @@ using OpType = std::variant<
 , KeccakType
 , GhashType
 , PolyType
+, ChaChaType
 , LsuType
 , AmoType
 , FpuType
@@ -829,6 +852,7 @@ using IntrArgs = std::variant<
 , IntrKeccakArgs
 , IntrGhashArgs
 , IntrPolyArgs
+, IntrChaChaArgs
 , IntrLsuArgs
 , IntrAmoArgs
 , IntrFpuArgs

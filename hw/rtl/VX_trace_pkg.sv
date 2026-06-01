@@ -226,6 +226,14 @@ package VX_trace_pkg;
                         default:                `TRACE(level, ("?"))
                     endcase
                 end
+                CRYPTO_CLASS_CHACHA: begin
+                    case (INST_ALU_BITS'(op_type))
+                        INST_CRYPTO_CHACHA_WR:    `TRACE(level, ("CHACHA.WR"))
+                        INST_CRYPTO_CHACHA_BLOCK: `TRACE(level, ("CHACHA.BLOCK"))
+                        INST_CRYPTO_CHACHA_RD:    `TRACE(level, ("CHACHA.RD"))
+                        default:                  `TRACE(level, ("?"))
+                    endcase
+                end
                 default: `TRACE(level, ("?"))
             endcase
         end

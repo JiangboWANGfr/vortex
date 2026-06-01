@@ -27,6 +27,11 @@ int main() {
 
   uint32_t mask = 0;
 
+  // 0. ChaCha20 block function (RFC 8439 sec 2.3.2) -- isolates the cipher core
+  uint8_t ks[64];
+  chacha20_block(CC20_KEY, CC20_COUNTER, CC20_NONCE, ks);
+  if (!eq(ks, CC20_KEYSTREAM, 64)) mask |= CCP_FAIL_CHACHA;
+
   // 1. Poly1305 standalone (RFC 8439 sec 2.5.2)
   uint8_t ptag[16];
   poly1305_mac(ptag, POLY_MSG, sizeof(POLY_MSG), POLY_KEY);

@@ -926,6 +926,12 @@
     `define EXT_POLY1305_ENABLED 0
 `endif
 
+`ifdef EXT_CHACHA_ENABLE
+    `define EXT_CHACHA_ENABLED 1
+`else
+    `define EXT_CHACHA_ENABLED 0
+`endif
+
 `ifdef EXT_TCU_ENABLE
     `define EXT_TCU_ENABLED 1
 `else

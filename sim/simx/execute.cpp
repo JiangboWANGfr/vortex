@@ -1204,6 +1204,43 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
       }
       rd_write = (poly_type == PolyType::RD);
     },
+    [&](ChaChaType chacha_type) {
+      // Per-lane ChaCha20: chacha[t] = 16 x 32-bit words. WR loads a word, BLOCK
+      // runs the 10 double-round permutation + feedforward add, RD reads a word.
+      // Math is bit-for-bit identical to chacha20.h and VX_crypto_chacha.sv.
+      auto& chacha_warp = chacha_state_.at(wid);
+      for (uint32_t t = thread_start; t < num_threads; ++t) {
+        if (!warp.tmask.test(t))
+          continue;
+        uint32_t* s = chacha_warp.at(t).data();
+        switch (chacha_type) {
+        case ChaChaType::WR: {
+          s[rs2_data[t].u32 & 0xf] = (uint32_t)rs1_data[t].u;
+        } break;
+        case ChaChaType::BLOCK: {
+          uint32_t x[16], st[16];
+          for (int i = 0; i < 16; ++i) { x[i] = s[i]; st[i] = s[i]; }
+          for (int r = 0; r < 10; ++r) {
+            #define CC20_QR(a,b,c,d) \
+              x[a]+=x[b]; x[d]^=x[a]; x[d]=(x[d]<<16)|(x[d]>>16); \
+              x[c]+=x[d]; x[b]^=x[c]; x[b]=(x[b]<<12)|(x[b]>>20); \
+              x[a]+=x[b]; x[d]^=x[a]; x[d]=(x[d]<< 8)|(x[d]>>24); \
+              x[c]+=x[d]; x[b]^=x[c]; x[b]=(x[b]<< 7)|(x[b]>>25);
+            CC20_QR(0,4,8,12)  CC20_QR(1,5,9,13)  CC20_QR(2,6,10,14) CC20_QR(3,7,11,15)
+            CC20_QR(0,5,10,15) CC20_QR(1,6,11,12) CC20_QR(2,7,8,13)  CC20_QR(3,4,9,14)
+            #undef CC20_QR
+          }
+          for (int i = 0; i < 16; ++i) s[i] = x[i] + st[i];
+        } break;
+        case ChaChaType::RD: {
+          rd_data[t].u = Word((uint64_t)s[rs1_data[t].u32 & 0xf]);
+        } break;
+        default:
+          std::abort();
+        }
+      }
+      rd_write = (chacha_type == ChaChaType::RD);
+    },
     [&](AesType aes_type) {
       auto aesArgs = std::get<IntrAesArgs>(instrArgs);
       for (uint32_t t = thread_start; t < num_threads; ++t) {

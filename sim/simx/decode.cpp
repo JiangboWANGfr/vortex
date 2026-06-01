@@ -239,6 +239,15 @@ static op_string_t op_string(const Instr &instr) {
         std::abort();
       }
     },
+    [&](ChaChaType chacha_type)-> op_string_t {
+      switch (chacha_type) {
+      case ChaChaType::WR:    return {"CHACHA_WR", ""};
+      case ChaChaType::BLOCK: return {"CHACHA_BLOCK", ""};
+      case ChaChaType::RD:    return {"CHACHA_RD", ""};
+      default:
+        std::abort();
+      }
+    },
     [&](FpuType fpu_type)-> op_string_t {
       auto fpuArgs = std::get<IntrFpuArgs>(instrArgs);
       switch (fpu_type) {
@@ -1306,6 +1315,28 @@ decode_integer_alu:
         break;
       case 2: // RD: rd = acc_limb[rs1]
         instr->setOpType(PolyType::RD);
+        instr->setDestReg(rd, RegType::Integer);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        break;
+      default:
+        std::abort();
+      }
+      ibuffer.push_back(instr);
+    } break;
+    case 6: {
+      auto instr = std::allocate_shared<Instr>(instr_pool_, uuid, FUType::ALU);
+      instr->setArgs(IntrChaChaArgs{});
+      switch (funct3) {
+      case 0: // WR: state[rs2[3:0]] = rs1
+        instr->setOpType(ChaChaType::WR);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        instr->setSrcReg(1, rs2, RegType::Integer);
+        break;
+      case 1: // BLOCK: permute + feedforward
+        instr->setOpType(ChaChaType::BLOCK);
+        break;
+      case 2: // RD: rd = state[rs1[3:0]]
+        instr->setOpType(ChaChaType::RD);
         instr->setDestReg(rd, RegType::Integer);
         instr->setSrcReg(0, rs1, RegType::Integer);
         break;

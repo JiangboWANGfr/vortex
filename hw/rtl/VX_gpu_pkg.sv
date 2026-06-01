@@ -299,6 +299,11 @@ package VX_gpu_pkg;
     localparam INST_CRYPTO_POLY_SETR  = 4'b1100;
     localparam INST_CRYPTO_POLY_BLOCK = 4'b1101;
     localparam INST_CRYPTO_POLY_RD    = 4'b1110;
+    // ChaCha20 op nibbles are private to CRYPTO_CLASS_CHACHA (interpreted only
+    // after crypto.unit selects the PE), so reusing 0x0..0x2 is collision-free.
+    localparam INST_CRYPTO_CHACHA_WR    = 4'b0000;
+    localparam INST_CRYPTO_CHACHA_BLOCK = 4'b0001;
+    localparam INST_CRYPTO_CHACHA_RD    = 4'b0010;
 
     localparam CRYPTO_CLASS_BITS = 3;
     localparam CRYPTO_CLASS_AES  = 3'd0;
@@ -307,6 +312,7 @@ package VX_gpu_pkg;
     localparam CRYPTO_CLASS_MISC = 3'd3;
     localparam CRYPTO_CLASS_GHASH = 3'd4;
     localparam CRYPTO_CLASS_POLY1305 = 3'd5;
+    localparam CRYPTO_CLASS_CHACHA = 3'd6;
 
     ///////////////////////////////////////////////////////////////////////////
 

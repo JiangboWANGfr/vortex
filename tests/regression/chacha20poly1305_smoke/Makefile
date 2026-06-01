@@ -20,6 +20,17 @@ else
   $(error unsupported POLY1305_ACCEL_MODE=$(POLY1305_ACCEL_MODE); supported: NATIVE SOFTWARE)
 endif
 
+# ChaCha20 cipher backend: SOFTWARE (pure ARX) or NATIVE (hardware PE).
+CHACHA20_ACCEL_MODE ?= SOFTWARE
+
+ifeq ($(CHACHA20_ACCEL_MODE),NATIVE)
+  CONFIGS += -DCHACHA20_NATIVE -DEXT_CHACHA_ENABLE
+else ifeq ($(CHACHA20_ACCEL_MODE),SOFTWARE)
+  # pure software ChaCha20; no hardware ChaCha PE
+else
+  $(error unsupported CHACHA20_ACCEL_MODE=$(CHACHA20_ACCEL_MODE); supported: NATIVE SOFTWARE)
+endif
+
 # Pure software ChaCha20-Poly1305 reference (no crypto PE). Match the prebuilt
 # libvortex.a float ABI (rv64ima, lp64 soft-float).
 EXT_F_DISABLE := 1

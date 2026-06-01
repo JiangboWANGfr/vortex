@@ -71,11 +71,12 @@ int main(int argc, char** argv) {
   if (status.errors != 0) {
     std::cout << "ChaCha20-Poly1305 smoke FAILED: failed_mask=0x"
               << std::hex << status.failed_mask << std::dec << std::endl;
+    if (status.failed_mask & CCP_FAIL_CHACHA)   std::cout << "  - chacha20 block (RFC 2.3.2)" << std::endl;
     if (status.failed_mask & CCP_FAIL_POLY1305) std::cout << "  - poly1305 (RFC 2.5.2)" << std::endl;
     if (status.failed_mask & CCP_FAIL_AEAD_CT)  std::cout << "  - aead ciphertext (RFC 2.8.2)" << std::endl;
     if (status.failed_mask & CCP_FAIL_AEAD_TAG) std::cout << "  - aead tag (RFC 2.8.2)" << std::endl;
     return (int)status.errors;
   }
-  std::cout << "ChaCha20-Poly1305 smoke PASSED (RFC 8439 2.5.2 + 2.8.2)" << std::endl;
+  std::cout << "ChaCha20-Poly1305 smoke PASSED (RFC 8439 2.3.2 + 2.5.2 + 2.8.2)" << std::endl;
   return 0;
 }
