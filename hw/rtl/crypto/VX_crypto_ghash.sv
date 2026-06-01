@@ -5,8 +5,15 @@
 // Per-lane multi-chain (design C-a): each SIMT lane owns an independent GHASH
 // chain. State holds {H, Y} per lane per warp, and every op is pure SIMT —
 // SETH/XOR/RD act on each active lane's own operand, and MUL multiplies all
-// active lanes' chains in parallel (the bit-serial datapath is replicated per
-// lane and shares one bit counter, so NUM_LANES chains finish in 128 cycles).
+// active lanes' chains in parallel.
+//
+// The MUL multiplier is digit-serial with a compile-time radix (design C-b):
+// GHASH_MUL_RADIX bits are processed per cycle by chaining that many bit-steps
+// combinationally, so MUL takes 128/RADIX cycles. RADIX=1 is the bit-serial
+// baseline (128 cycles); RADIX=128 is a fully combinational multiply (1 cycle,
+// long critical path — Karatsuba would optimize its gate count/fmax). Because
+// it is the same shift-XOR loop unrolled, every radix is bit-identical to the
+// software gf128_mul gold model.
 //
 // State is held as 128-bit BIG-ENDIAN integers (byte 0 = MSB), so NIST
 // polynomial bit i maps to integer bit [127-i]; the carry-less multiply is a
@@ -42,6 +49,14 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
 
     // GF(2^128) reduction polynomial top byte: R = 0xE1 in byte 0 (MSB).
     localparam logic [127:0] GHASH_R = {8'hE1, 120'h0};
+
+    // Digit-serial multiply radix: bits processed per MUL cycle (128/RADIX cyc).
+`ifdef GHASH_MUL_RADIX
+    localparam MUL_RADIX = `GHASH_MUL_RADIX;
+`else
+    localparam MUL_RADIX = 1;
+`endif
+    `STATIC_ASSERT ((128 % MUL_RADIX) == 0, ("GHASH_MUL_RADIX must divide 128"))
 
     // 128-bit value occupies NWORDS XLEN-wide registers.
     localparam NWORDS    = 128 / `XLEN;
@@ -95,16 +110,36 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
     wire do_read = (execute_if.data.op_type == INST_CRYPTO_GHASH_RD);
     wire do_mul  = (execute_if.data.op_type == INST_CRYPTO_GHASH_MUL);
 
-    // One bit of the carry-less multiply per lane (shared counter). NIST bit i
-    // of X = X[127-i]; accumulate V into Z; shift V right with reduction.
+    // RADIX bits of the carry-less multiply per lane per cycle (shared counter).
+    // Chains MUL_RADIX bit-steps combinationally: NIST bit i of X = X[127-i];
+    // accumulate V into Z; shift V right with reduction. Returns {Z, V}.
+    function automatic [255:0] gf_radix(input [127:0] x,
+                                        input [127:0] z_in,
+                                        input [127:0] v_in,
+                                        input [7:0]   base);
+        reg [127:0] z, v, v_sh;
+        reg         x_bit, v_lsb;
+        integer     j;
+        begin
+            z = z_in;
+            v = v_in;
+            for (j = 0; j < MUL_RADIX; j = j + 1) begin
+                x_bit = x[127 - (base + j[7:0])];
+                z     = x_bit ? (z ^ v) : z;
+                v_lsb = v[0];
+                v_sh  = v >> 1;
+                v     = v_lsb ? (v_sh ^ GHASH_R) : v_sh;
+            end
+            gf_radix = {z, v};
+        end
+    endfunction
+
     wire [NUM_LANES-1:0][127:0] mul_z_next;
     wire [NUM_LANES-1:0][127:0] mul_v_next;
     for (genvar l = 0; l < NUM_LANES; ++l) begin : g_mul_step
-        wire        x_bit = mul_x_r[l][127 - bit_ctr_r];
-        wire        v_lsb = mul_v_r[l][0];
-        wire [127:0] v_sh = mul_v_r[l] >> 1;
-        assign mul_z_next[l] = x_bit ? (mul_z_r[l] ^ mul_v_r[l]) : mul_z_r[l];
-        assign mul_v_next[l] = v_lsb ? (v_sh ^ GHASH_R) : v_sh;
+        wire [255:0] step = gf_radix(mul_x_r[l], mul_z_r[l], mul_v_r[l], bit_ctr_r);
+        assign mul_z_next[l] = step[255:128];
+        assign mul_v_next[l] = step[127:0];
     end
 
     integer w;
@@ -174,7 +209,7 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
                         mul_z_r[l] <= mul_z_next[l];
                         mul_v_r[l] <= mul_v_next[l];
                     end
-                    if (bit_ctr_r == 8'd127) begin
+                    if (bit_ctr_r == 8'(128 - MUL_RADIX)) begin
                         for (l = 0; l < NUM_LANES; ++l) begin
                             if (tmask_r[l]) begin
                                 state_mem[ghash_state_idx(wid_r)].Y[l] <= mul_z_next[l];
@@ -182,7 +217,7 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
                         end
                         state_r <= ST_RESP;
                     end else begin
-                        bit_ctr_r <= bit_ctr_r + 8'd1;
+                        bit_ctr_r <= bit_ctr_r + 8'(MUL_RADIX);
                     end
                 end
                 ST_RESP: begin

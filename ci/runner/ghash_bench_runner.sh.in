@@ -34,6 +34,8 @@ Options:
   --driver=<simx|rtlsim|de10pro>    Backend driver (default: simx)
   --accel-modes=<list>              Comma-separated modes (default: SOFTWARE,NATIVE)
   --dispatch=<list>                 Comma-separated dispatch modes (default: WARP,LANE)
+  --mul-radix=<k>                   Digit-serial MUL radix; MUL = 128/k cycles
+                                    (default: 1 = bit-serial; k must divide 128)
   --tasks=<n>                       Independent GHASH streams (default: 32)
   --blocks=<n>                      16-byte blocks per stream (default: 64)
   --output-root=<path>              Output root (default: <build>/runner_output)
@@ -73,9 +75,13 @@ driver_configs() {
     local need_native="$1"
     # The hardware GHASH PE is compiled into the simulator only with
     # -DEXT_GHASH_ENABLE; SOFTWARE runs tolerate its presence, so build the
-    # driver once with the PE when any requested mode is NATIVE.
+    # driver once with the PE when any requested mode is NATIVE. GHASH_MUL_RADIX
+    # selects the digit-serial MUL radix (MUL = 128/radix cycles) and must reach
+    # the driver: the RTL multiplier (rtlsim) and the simx func_unit latency.
     if [[ "$need_native" -eq 1 ]]; then
-        printf '%s\n' "CONFIGS=-DEXT_GHASH_ENABLE"
+        local cfg="-DEXT_GHASH_ENABLE"
+        [[ "$MUL_RADIX" != "1" ]] && cfg="$cfg -DGHASH_MUL_RADIX=$MUL_RADIX"
+        printf '%s\n' "CONFIGS=$cfg"
     fi
 }
 
@@ -116,6 +122,7 @@ main() {
     DEBUG_LEVEL=0
     TASKS="32"
     BLOCKS="64"
+    MUL_RADIX="1"
     OUTPUT_ROOT="$ROOT_DIR/runner_output"
     RESULTS=""
     LOG_DIR=""
@@ -127,6 +134,7 @@ main() {
             --driver=*) DRIVER="${1#*=}" ;;
             --accel-modes=*) accel_mode_list="${1#*=}" ;;
             --dispatch=*) dispatch_list="${1#*=}" ;;
+            --mul-radix=*) MUL_RADIX="${1#*=}" ;;
             --tasks=*) TASKS="${1#*=}" ;;
             --blocks=*) BLOCKS="${1#*=}" ;;
             --output-root=*) OUTPUT_ROOT="${1#*=}" ;;
@@ -166,6 +174,7 @@ main() {
     echo "DRIVER=$DRIVER"
     echo "ACCEL_MODES=${ACCEL_MODES[*]}"
     echo "DISPATCHES=${DISPATCHES[*]}"
+    echo "MUL_RADIX=$MUL_RADIX"
     echo "TASKS=$TASKS"
     echo "BLOCKS=$BLOCKS"
     echo "RESULTS=$RESULTS"

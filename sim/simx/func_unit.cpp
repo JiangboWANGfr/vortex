@@ -150,8 +150,12 @@ void AluUnit::tick() {
 					delay = 2;
 					break;
 				case GhashType::MUL:
-					// bit-serial GF(2^128) multiply: 128 cycles + accept/resp
+					// digit-serial GF(2^128) multiply: 128/RADIX cycles + accept/resp
+#ifdef GHASH_MUL_RADIX
+					delay = (128 / GHASH_MUL_RADIX) + 2;
+#else
 					delay = 130;
+#endif
 					break;
 				default:
 					std::abort();
