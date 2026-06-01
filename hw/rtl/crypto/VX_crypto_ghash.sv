@@ -2,24 +2,21 @@
 
 // GHASH processing element (GF(2^128) multiply-accumulate for AES-GCM / GMAC).
 //
-// Structurally a twin of VX_crypto_keccak.sv: a stateful, per-warp, multi-cycle
-// crypto PE. The 1600-bit Keccak state is replaced by a 256-bit {H, Y} pair and
-// the 24-round permutation is replaced by a bit-serial GF(2^128) multiply.
+// Per-lane multi-chain (design C-a): each SIMT lane owns an independent GHASH
+// chain. State holds {H, Y} per lane per warp, and every op is pure SIMT —
+// SETH/XOR/RD act on each active lane's own operand, and MUL multiplies all
+// active lanes' chains in parallel (the bit-serial datapath is replicated per
+// lane and shares one bit counter, so NUM_LANES chains finish in 128 cycles).
 //
-// State is held as 128-bit BIG-ENDIAN integers: byte 0 of the NIST
-// representation is the most-significant byte, so NIST polynomial bit i maps to
-// integer bit [127-i]. With that convention the carry-less multiply below is a
-// bit-for-bit transcription of gf128_mul() in tests/.../ghash_smoke/ghash_ref.h,
-// which makes the software smoke a gold model for this PE.
+// State is held as 128-bit BIG-ENDIAN integers (byte 0 = MSB), so NIST
+// polynomial bit i maps to integer bit [127-i]; the carry-less multiply is a
+// bit-for-bit transcription of gf128_mul() in ghash_smoke/ghash_ref.h.
 //
 // Ops (op_type):
-//   GHASH_SETH : H[word] = rs1          (word index in rs2 low bits)
-//   GHASH_XOR  : Y[word] ^= rs1         (word index in rs2 low bits)
-//   GHASH_RD   : rd = Y[word]           (word index in rs1 low bits)
-//   GHASH_MUL  : Y = Y * H mod (x^128 + x^7 + x^2 + x + 1)   [128-cycle FSM]
-//
-// A 128-bit value spans NWORDS = 128/XLEN registers (2 on RV64, 4 on RV32);
-// the word index selects which XLEN-bit slice to write/read.
+//   GHASH_SETH : H[lane][word] = rs1[lane]      (word in rs2[lane] low bits)
+//   GHASH_XOR  : Y[lane][word] ^= rs1[lane]     (word in rs2[lane] low bits)
+//   GHASH_RD   : rd[lane] = Y[lane][word]       (word in rs1[lane] low bits)
+//   GHASH_MUL  : Y[lane] = Y[lane] * H[lane] mod P   [128-cycle FSM]
 
 module VX_crypto_ghash import VX_gpu_pkg::*; #(
     parameter `STRING INSTANCE_ID = "",
@@ -39,8 +36,8 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
     `STATIC_ASSERT (`IS_DIVISBLE(`NUM_WARPS, BLOCK_SIZE), ("invalid parameter"))
 
     typedef struct packed {
-        logic [127:0] H;   // hash subkey
-        logic [127:0] Y;   // running tag accumulator
+        logic [NUM_LANES-1:0][127:0] H;   // per-lane hash subkey
+        logic [NUM_LANES-1:0][127:0] Y;   // per-lane tag accumulator
     } ghash_state_t;
 
     // GF(2^128) reduction polynomial top byte: R = 0xE1 in byte 0 (MSB).
@@ -57,7 +54,7 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
     localparam STATE_WID_WIDTH = `UP(STATE_WID_BITS);
 
     // ST_IDLE : accept a new GHASH op
-    // ST_MUL  : bit-serial GF(2^128) multiply, one bit per cycle (128 cycles)
+    // ST_MUL  : bit-serial GF(2^128) multiply for all lanes (128 cycles)
     // ST_RESP : hold result until result_if.ready
     localparam ST_IDLE = 2'd0;
     localparam ST_MUL  = 2'd1;
@@ -65,17 +62,17 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
 
     ghash_state_t state_mem [STATE_WARPS];
 
-    reg [1:0]            state_r;
-    reg [7:0]            bit_ctr_r;     // 0..127 multiply bit counter
-    reg [127:0]          mul_x_r;       // scanned operand (Y after XOR)
-    reg [127:0]          mul_v_r;       // shifted operand (H)
-    reg [127:0]          mul_z_r;       // product accumulator
-    reg [NW_WIDTH-1:0]   wid_r;
-    reg [META_DATAW-1:0] meta_r;
-    reg [`XLEN-1:0]      pending_data_r;
+    reg [1:0]                    state_r;
+    reg [7:0]                    bit_ctr_r;     // 0..127 multiply bit counter
+    reg [NUM_LANES-1:0][127:0]   mul_x_r;       // per-lane scanned operand (Y)
+    reg [NUM_LANES-1:0][127:0]   mul_v_r;       // per-lane shifted operand (H)
+    reg [NUM_LANES-1:0][127:0]   mul_z_r;       // per-lane product accumulator
+    reg [NW_WIDTH-1:0]           wid_r;
+    reg [NUM_LANES-1:0]          tmask_r;       // active-lane mask for MUL writeback
+    reg [META_DATAW-1:0]         meta_r;
+    reg [NUM_LANES-1:0][`XLEN-1:0] pending_data_r;
 
-    wire [WSEL_BITS-1:0] wr_word = execute_if.data.rs2_data[0][WSEL_BITS-1:0];
-    wire [WSEL_BITS-1:0] rd_word = execute_if.data.rs1_data[0][WSEL_BITS-1:0];
+    wire [NUM_LANES-1:0] tmask = execute_if.data.tmask;
 
     // map global warp id -> per-block state index (identical to Keccak PE)
     function automatic [STATE_WID_WIDTH-1:0] ghash_state_idx(input [NW_WIDTH-1:0] wid);
@@ -98,16 +95,20 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
     wire do_read = (execute_if.data.op_type == INST_CRYPTO_GHASH_RD);
     wire do_mul  = (execute_if.data.op_type == INST_CRYPTO_GHASH_MUL);
 
-    // One bit of the carry-less multiply for the current counter value.
-    // Scans X bit (NIST bit i = X[127-i]); accumulates V into Z; shifts V right
-    // with conditional reduction. Mirrors gf128_mul() exactly.
-    wire        mul_x_bit  = mul_x_r[127 - bit_ctr_r];
-    wire [127:0] mul_z_next = mul_x_bit ? (mul_z_r ^ mul_v_r) : mul_z_r;
-    wire        mul_v_lsb  = mul_v_r[0];
-    wire [127:0] mul_v_sh   = mul_v_r >> 1;
-    wire [127:0] mul_v_next = mul_v_lsb ? (mul_v_sh ^ GHASH_R) : mul_v_sh;
+    // One bit of the carry-less multiply per lane (shared counter). NIST bit i
+    // of X = X[127-i]; accumulate V into Z; shift V right with reduction.
+    wire [NUM_LANES-1:0][127:0] mul_z_next;
+    wire [NUM_LANES-1:0][127:0] mul_v_next;
+    for (genvar l = 0; l < NUM_LANES; ++l) begin : g_mul_step
+        wire        x_bit = mul_x_r[l][127 - bit_ctr_r];
+        wire        v_lsb = mul_v_r[l][0];
+        wire [127:0] v_sh = mul_v_r[l] >> 1;
+        assign mul_z_next[l] = x_bit ? (mul_z_r[l] ^ mul_v_r[l]) : mul_z_r[l];
+        assign mul_v_next[l] = v_lsb ? (v_sh ^ GHASH_R) : v_sh;
+    end
 
     integer w;
+    integer l;
     always_ff @(posedge clk) begin
         if (reset) begin
             state_r        <= ST_IDLE;
@@ -116,6 +117,7 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
             mul_v_r        <= '0;
             mul_z_r        <= '0;
             wid_r          <= '0;
+            tmask_r        <= '0;
             meta_r         <= '0;
             pending_data_r <= '0;
             for (w = 0; w < STATE_WARPS; ++w) begin
@@ -129,22 +131,37 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
                                    execute_if.data.PC, execute_if.data.wb, execute_if.data.rd,
                                    execute_if.data.pid, execute_if.data.sop, execute_if.data.eop};
                         wid_r <= execute_if.data.wid;
+                        tmask_r <= tmask;
                         pending_data_r <= '0;
                         if (do_seth) begin
-                            state_mem[sidx].H[wr_word*`XLEN +: `XLEN] <= execute_if.data.rs1_data[0];
+                            for (l = 0; l < NUM_LANES; ++l) begin
+                                if (tmask[l]) begin
+                                    state_mem[sidx].H[l][execute_if.data.rs2_data[l][WSEL_BITS-1:0]*`XLEN +: `XLEN]
+                                        <= execute_if.data.rs1_data[l];
+                                end
+                            end
                             state_r <= ST_RESP;
                         end else if (do_xor) begin
-                            state_mem[sidx].Y[wr_word*`XLEN +: `XLEN]
-                                <= state_mem[sidx].Y[wr_word*`XLEN +: `XLEN] ^ execute_if.data.rs1_data[0];
+                            for (l = 0; l < NUM_LANES; ++l) begin
+                                if (tmask[l]) begin
+                                    state_mem[sidx].Y[l][execute_if.data.rs2_data[l][WSEL_BITS-1:0]*`XLEN +: `XLEN]
+                                        <= state_mem[sidx].Y[l][execute_if.data.rs2_data[l][WSEL_BITS-1:0]*`XLEN +: `XLEN]
+                                         ^ execute_if.data.rs1_data[l];
+                                end
+                            end
                             state_r <= ST_RESP;
                         end else if (do_read) begin
-                            pending_data_r <= state_mem[sidx].Y[rd_word*`XLEN +: `XLEN];
+                            for (l = 0; l < NUM_LANES; ++l) begin
+                                pending_data_r[l]
+                                    <= state_mem[sidx].Y[l][execute_if.data.rs1_data[l][WSEL_BITS-1:0]*`XLEN +: `XLEN];
+                            end
                             state_r <= ST_RESP;
                         end else if (do_mul) begin
-                            // Z = X * V with X = current Y, V = H.
-                            mul_x_r   <= state_mem[sidx].Y;
-                            mul_v_r   <= state_mem[sidx].H;
-                            mul_z_r   <= '0;
+                            for (l = 0; l < NUM_LANES; ++l) begin
+                                mul_x_r[l] <= state_mem[sidx].Y[l];
+                                mul_v_r[l] <= state_mem[sidx].H[l];
+                                mul_z_r[l] <= '0;
+                            end
                             bit_ctr_r <= '0;
                             state_r   <= ST_MUL;
                         end else begin
@@ -153,10 +170,16 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
                     end
                 end
                 ST_MUL: begin
-                    mul_z_r <= mul_z_next;
-                    mul_v_r <= mul_v_next;
+                    for (l = 0; l < NUM_LANES; ++l) begin
+                        mul_z_r[l] <= mul_z_next[l];
+                        mul_v_r[l] <= mul_v_next[l];
+                    end
                     if (bit_ctr_r == 8'd127) begin
-                        state_mem[ghash_state_idx(wid_r)].Y <= mul_z_next;
+                        for (l = 0; l < NUM_LANES; ++l) begin
+                            if (tmask_r[l]) begin
+                                state_mem[ghash_state_idx(wid_r)].Y[l] <= mul_z_next[l];
+                            end
+                        end
                         state_r <= ST_RESP;
                     end else begin
                         bit_ctr_r <= bit_ctr_r + 8'd1;
@@ -179,7 +202,7 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
             result_if.data.pid, result_if.data.sop, result_if.data.eop} = meta_r;
 
     for (genvar i = 0; i < NUM_LANES; ++i) begin : g_wb_data
-        assign result_if.data.data[i] = `XLEN'(pending_data_r);
+        assign result_if.data.data[i] = `XLEN'(pending_data_r[i]);
     end
 
 endmodule

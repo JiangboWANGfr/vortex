@@ -25,10 +25,16 @@ hardware-vs-software measurement.
 Usage:
   $0 [options]
 
+Dispatch modes:
+  WARP : one chain per warp (one active thread); parallelism across warps x cores
+  LANE : one chain per thread (all lanes active); a warp runs NUM_THREADS chains
+         at once (needs per-lane GHASH state, design C-a)
+
 Options:
   --driver=<simx|rtlsim|de10pro>    Backend driver (default: simx)
   --accel-modes=<list>              Comma-separated modes (default: SOFTWARE,NATIVE)
-  --tasks=<n>                       Independent GHASH streams / warps (default: 32)
+  --dispatch=<list>                 Comma-separated dispatch modes (default: WARP,LANE)
+  --tasks=<n>                       Independent GHASH streams (default: 32)
   --blocks=<n>                      16-byte blocks per stream (default: 64)
   --output-root=<path>              Output root (default: <build>/runner_output)
   --results=<path>                  TSV output path (default: <output-root>/ghash_bench/results/<driver>/results.tsv)
@@ -53,6 +59,13 @@ validate_accel_mode() {
     case "$1" in
         SOFTWARE|NATIVE) ;;
         *) die "unsupported GHASH_ACCEL_MODE=$1; supported: SOFTWARE NATIVE" ;;
+    esac
+}
+
+validate_dispatch() {
+    case "$1" in
+        WARP|LANE) ;;
+        *) die "unsupported GHASH_BENCH_DISPATCH=$1; supported: WARP LANE" ;;
     esac
 }
 
@@ -107,11 +120,13 @@ main() {
     RESULTS=""
     LOG_DIR=""
     accel_mode_list="SOFTWARE,NATIVE"
+    dispatch_list="WARP,LANE"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --driver=*) DRIVER="${1#*=}" ;;
             --accel-modes=*) accel_mode_list="${1#*=}" ;;
+            --dispatch=*) dispatch_list="${1#*=}" ;;
             --tasks=*) TASKS="${1#*=}" ;;
             --blocks=*) BLOCKS="${1#*=}" ;;
             --output-root=*) OUTPUT_ROOT="${1#*=}" ;;
@@ -129,11 +144,15 @@ main() {
     done
 
     IFS=',' read -r -a ACCEL_MODES <<< "$accel_mode_list"
+    IFS=',' read -r -a DISPATCHES <<< "$dispatch_list"
 
-    local need_native=0 mode
+    local need_native=0 mode dispatch
     for mode in "${ACCEL_MODES[@]}"; do
         validate_accel_mode "$mode"
         [[ "$mode" == "NATIVE" ]] && need_native=1
+    done
+    for dispatch in "${DISPATCHES[@]}"; do
+        validate_dispatch "$dispatch"
     done
 
     load_xlen
@@ -146,6 +165,7 @@ main() {
     echo "XLEN=$XLEN"
     echo "DRIVER=$DRIVER"
     echo "ACCEL_MODES=${ACCEL_MODES[*]}"
+    echo "DISPATCHES=${DISPATCHES[*]}"
     echo "TASKS=$TASKS"
     echo "BLOCKS=$BLOCKS"
     echo "RESULTS=$RESULTS"
@@ -162,50 +182,54 @@ main() {
     declare -A software_cycles=()
 
     for mode in "${ACCEL_MODES[@]}"; do
-        local build_args=("make" "-C" "$app_dir" "clean" "all"
-                          "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR" "GHASH_ACCEL_MODE=$mode")
-        while IFS= read -r flag; do
-            [[ -n "$flag" ]] && build_args+=("$flag")
-        done < <(join_flags)
-        run_cmd "${build_args[@]}"
+        for dispatch in "${DISPATCHES[@]}"; do
+            local build_args=("make" "-C" "$app_dir" "clean" "all"
+                              "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR"
+                              "GHASH_ACCEL_MODE=$mode" "GHASH_BENCH_DISPATCH=$dispatch")
+            while IFS= read -r flag; do
+                [[ -n "$flag" ]] && build_args+=("$flag")
+            done < <(join_flags)
+            run_cmd "${build_args[@]}"
 
-        local log_file="$LOG_DIR/ghash-bench-${mode}-${DRIVER}.log"
-        local status
-        if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$DRIVER" \
-                "GHASH_ACCEL_MODE=$mode" "OPTS=-t $TASKS -n $BLOCKS" >"$log_file" 2>&1; then
-            status="PASS"
-        else
-            status="FAIL"
-            failures=$((failures + 1))
-        fi
+            local log_file="$LOG_DIR/ghash-bench-${mode}-${dispatch}-${DRIVER}.log"
+            local status
+            if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$DRIVER" \
+                    "GHASH_ACCEL_MODE=$mode" "GHASH_BENCH_DISPATCH=$dispatch" \
+                    "OPTS=-t $TASKS -n $BLOCKS" >"$log_file" 2>&1; then
+                status="PASS"
+            else
+                status="FAIL"
+                failures=$((failures + 1))
+            fi
 
-        local num_tasks blocks_per_task total_blocks total_bytes perf instrs cycles ipc row_key
-        num_tasks=$(extract_field "num_tasks" "$log_file")
-        blocks_per_task=$(extract_field "blocks_per_task" "$log_file")
-        total_blocks=$(extract_field "total_blocks" "$log_file")
-        total_bytes=$(extract_field "total_bytes" "$log_file")
-        perf=$(extract_perf "$log_file")
-        IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
-        row_key="$DRIVER|${num_tasks:-$TASKS}|${blocks_per_task:-$BLOCKS}"
-        if [[ "$mode" == "SOFTWARE" && -n "$cycles" ]]; then
-            software_cycles["$row_key"]="$cycles"
-        fi
+            local num_tasks blocks_per_task total_blocks total_bytes perf instrs cycles ipc row_key
+            num_tasks=$(extract_field "num_tasks" "$log_file")
+            blocks_per_task=$(extract_field "blocks_per_task" "$log_file")
+            total_blocks=$(extract_field "total_blocks" "$log_file")
+            total_bytes=$(extract_field "total_bytes" "$log_file")
+            perf=$(extract_perf "$log_file")
+            IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
+            row_key="$DRIVER|$dispatch|${num_tasks:-$TASKS}|${blocks_per_task:-$BLOCKS}"
+            if [[ "$mode" == "SOFTWARE" && -n "$cycles" ]]; then
+                software_cycles["$row_key"]="$cycles"
+            fi
 
-        rows+=("$mode"$'\t'"$DRIVER"$'\t'"$(format_number "${num_tasks:-$TASKS}")"$'\t'"$(format_number "${blocks_per_task:-$BLOCKS}")"$'\t'"$(format_number "$total_blocks")"$'\t'"$(format_number "$total_bytes")"$'\t'"$instrs"$'\t'"$cycles"$'\t'"$ipc"$'\t'"$status"$'\t'"$log_file"$'\t'"$row_key")
+            rows+=("$mode"$'\t'"$dispatch"$'\t'"$DRIVER"$'\t'"$(format_number "${num_tasks:-$TASKS}")"$'\t'"$(format_number "${blocks_per_task:-$BLOCKS}")"$'\t'"$(format_number "$total_blocks")"$'\t'"$(format_number "$total_bytes")"$'\t'"$instrs"$'\t'"$cycles"$'\t'"$ipc"$'\t'"$status"$'\t'"$log_file"$'\t'"$row_key")
+        done
     done
 
-    printf 'algo\taccel_mode\tdriver\tnum_tasks\tblocks_per_task\ttotal_blocks\ttotal_bytes\tinstrs\tcycles\tcycles_speedup\tipc\tstatus\tlog\n' > "$RESULTS"
+    printf 'algo\taccel_mode\tdispatch\tdriver\tnum_tasks\tblocks_per_task\ttotal_blocks\ttotal_bytes\tinstrs\tcycles\tcycles_speedup\tipc\tstatus\tlog\n' > "$RESULTS"
     local row
     for row in "${rows[@]}"; do
-        IFS=$'\t' read -r mode driver num_tasks blocks_per_task total_blocks total_bytes instrs cycles ipc status log_file row_key <<< "$row"
+        IFS=$'\t' read -r mode dispatch driver num_tasks blocks_per_task total_blocks total_bytes instrs cycles ipc status log_file row_key <<< "$row"
         local speedup=""
         if [[ "$mode" == "SOFTWARE" && -n "$cycles" ]]; then
             speedup="1x"
         elif [[ -n "$row_key" && -n "${software_cycles[$row_key]:-}" && -n "$cycles" ]]; then
             speedup=$(format_speedup "${software_cycles[$row_key]}" "$cycles")
         fi
-        printf 'ghash\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "$mode" "$driver" "$num_tasks" "$blocks_per_task" "$total_blocks" "$total_bytes" \
+        printf 'ghash\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$mode" "$dispatch" "$driver" "$num_tasks" "$blocks_per_task" "$total_blocks" "$total_bytes" \
             "$instrs" "$cycles" "$speedup" "$ipc" "$status" "$log_file" >> "$RESULTS"
     done
 

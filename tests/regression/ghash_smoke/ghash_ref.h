@@ -46,17 +46,21 @@ static inline void gf128_mul(uint8_t Z[GHASH_BLOCK_BYTES],
   for (int i = 0; i < GHASH_BLOCK_BYTES; ++i)
     Z[i] = 0;
 
+  // Branchless / constant-time: data-dependent choices use byte masks instead
+  // of `if`, so the routine is side-channel hardened AND does not diverge when
+  // independent lanes process different data under SIMT (LANE dispatch). The
+  // hardware GHASH PE is likewise branchless, so the two stay bit-identical.
   for (int i = 0; i < 128; ++i) {
     // X[i] in NIST bit numbering = (X[i/8] >> (7 - i%8)) & 1.
     int byte_idx = i >> 3;
     int bit_off = 7 - (i & 7);
-    if ((X[byte_idx] >> bit_off) & 1u) {
-      for (int j = 0; j < GHASH_BLOCK_BYTES; ++j)
-        Z[j] ^= V[j];
-    }
+    uint8_t x_bit = (uint8_t)((X[byte_idx] >> bit_off) & 1u);
+    uint8_t x_mask = (uint8_t)(0u - x_bit); // 0x00 if bit clear, 0xFF if set
+    for (int j = 0; j < GHASH_BLOCK_BYTES; ++j)
+      Z[j] ^= (uint8_t)(V[j] & x_mask);
 
     // V[127] = LSB of V[15] in NIST bit numbering.
-    int v_lsb = V[GHASH_BLOCK_BYTES - 1] & 1u;
+    uint8_t v_lsb = (uint8_t)(V[GHASH_BLOCK_BYTES - 1] & 1u);
 
     // V >>= 1 across 128 bits, MSB-first byte order.
     for (int j = GHASH_BLOCK_BYTES - 1; j > 0; --j) {
@@ -64,10 +68,8 @@ static inline void gf128_mul(uint8_t Z[GHASH_BLOCK_BYTES],
     }
     V[0] = (uint8_t)(V[0] >> 1);
 
-    if (v_lsb) {
-      // V ^= R, where R = 0xe1 || 0x00 * 15.
-      V[0] ^= 0xe1;
-    }
+    // V ^= R (R = 0xe1 || 0x00*15) iff v_lsb, via mask.
+    V[0] ^= (uint8_t)(0xe1u & (uint8_t)(0u - v_lsb));
   }
 }
 

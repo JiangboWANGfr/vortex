@@ -1111,44 +1111,43 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
       }
     },
     [&](GhashType ghash_type) {
-      // Per-warp state: ghash[0]=H, ghash[1]=Y (128-bit big-endian integers).
-      // A 128-bit value spans (128/XLEN) XLEN-wide words; the word index selects
-      // the slice, mirroring the +:XLEN part-select in VX_crypto_ghash.sv.
-      auto& ghash = ghash_state_.at(wid);
+      // Per-lane multi-chain: each thread owns an independent GHASH chain.
+      // ghash[t] = {H, Y} (128-bit big-endian integers). A 128-bit value spans
+      // (128/XLEN) XLEN-wide words; the word index selects the slice, mirroring
+      // the +:XLEN part-select in VX_crypto_ghash.sv.
+      auto& ghash_warp = ghash_state_.at(wid);
       const unsigned __int128 word_mask = (((unsigned __int128)1) << XLEN) - 1;
-      switch (ghash_type) {
-      case GhashType::SETH: {
-        uint32_t word = rs2_data[0].u32 & ((128 / XLEN) - 1);
-        uint32_t shift = word * XLEN;
-        unsigned __int128 val = ((unsigned __int128)(rs1_data[0].u) & word_mask) << shift;
-        ghash[0] = (ghash[0] & ~(word_mask << shift)) | val;
-        rd_write = false;
-      } break;
-      case GhashType::XOR: {
-        uint32_t word = rs2_data[0].u32 & ((128 / XLEN) - 1);
-        uint32_t shift = word * XLEN;
-        ghash[1] ^= ((unsigned __int128)(rs1_data[0].u) & word_mask) << shift;
-        rd_write = false;
-      } break;
-      case GhashType::RD: {
-        uint32_t word = rs1_data[0].u32 & ((128 / XLEN) - 1);
-        uint32_t shift = word * XLEN;
-        uint64_t value = (uint64_t)((ghash[1] >> shift) & word_mask);
-        for (uint32_t t = thread_start; t < num_threads; ++t) {
-          if (!warp.tmask.test(t))
-            continue;
-          rd_data[t].u = Word(value);
+      for (uint32_t t = thread_start; t < num_threads; ++t) {
+        if (!warp.tmask.test(t))
+          continue;
+        auto& H = ghash_warp.at(t)[0];
+        auto& Y = ghash_warp.at(t)[1];
+        switch (ghash_type) {
+        case GhashType::SETH: {
+          uint32_t word = rs2_data[t].u32 & ((128 / XLEN) - 1);
+          uint32_t shift = word * XLEN;
+          unsigned __int128 val = ((unsigned __int128)(rs1_data[t].u) & word_mask) << shift;
+          H = (H & ~(word_mask << shift)) | val;
+        } break;
+        case GhashType::XOR: {
+          uint32_t word = rs2_data[t].u32 & ((128 / XLEN) - 1);
+          uint32_t shift = word * XLEN;
+          Y ^= ((unsigned __int128)(rs1_data[t].u) & word_mask) << shift;
+        } break;
+        case GhashType::RD: {
+          uint32_t word = rs1_data[t].u32 & ((128 / XLEN) - 1);
+          uint32_t shift = word * XLEN;
+          rd_data[t].u = Word((uint64_t)((Y >> shift) & word_mask));
+        } break;
+        case GhashType::MUL:
+          // Y = Y * H  (scan Y bits, shift H), matching ghash_update_block.
+          Y = ghash_gfmul_be(Y, H);
+          break;
+        default:
+          std::abort();
         }
-        rd_write = true;
-      } break;
-      case GhashType::MUL:
-        // Y = Y * H  (scan Y bits, shift H), matching ghash_update_block.
-        ghash[1] = ghash_gfmul_be(ghash[1], ghash[0]);
-        rd_write = false;
-        break;
-      default:
-        std::abort();
       }
+      rd_write = (ghash_type == GhashType::RD);
     },
     [&](AesType aes_type) {
       auto aesArgs = std::get<IntrAesArgs>(instrArgs);

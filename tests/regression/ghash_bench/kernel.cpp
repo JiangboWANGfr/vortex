@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Warp-affine GHASH throughput benchmark. Each task owns one warp and runs
-// one independent GHASH stream (blocks_per_task 16-byte blocks under a shared
-// H). vx_tmc_one() keeps exactly one active thread per warp so the per-warp
-// {H,Y} hardware state is not shared between independent streams. Parallelism
-// therefore comes from warps x cores (num_tasks streams in flight), which is
-// the correct granularity for the per-warp GHASH PE.
+// GHASH throughput benchmark. Each task runs one independent GHASH stream
+// (blocks_per_task 16-byte blocks under a shared H).
+//
+// Two dispatch modes select the parallelism granularity:
+//   WARP (default): vx_tmc_one() keeps one active thread per warp, so each
+//     task = one warp = one stream. Parallelism comes from warps x cores.
+//   LANE (GHASH_BENCH_DISPATCH_LANE): all threads active, each thread = one
+//     stream, so a warp runs NUM_THREADS independent chains at once. Requires
+//     per-lane GHASH state (design C-a); this is where multi-chain throughput
+//     shows up.
 //
 // SOFTWARE vs NATIVE is selected by ghash_ref.h (GHASH_NATIVE), so both modes
 // run the identical dispatch and differ only in the GF(2^128) implementation.
@@ -26,8 +30,10 @@ struct TaskArgs {
 };
 
 void ghash_worker(const TaskArgs* __UNIFORM__ args) {
-  // Warp-affine: collapse to one active thread per warp.
+#ifndef GHASH_BENCH_DISPATCH_LANE
+  // WARP mode: collapse to one active thread per warp (one chain per warp).
   vx_tmc_one();
+#endif
 
   uint32_t task_id = blockIdx.x;
   const uint8_t* data = args->data
@@ -60,11 +66,17 @@ int main() {
     arg->blocks_per_task,
   };
 
-  // block_dim = threads-per-warp makes each task own a whole warp; the worker
-  // then masks down to one active thread (warp affinity).
+#ifdef GHASH_BENCH_DISPATCH_LANE
+  // LANE mode: one task per thread; all lanes active, each its own chain.
+  vx_spawn_threads(1, &arg->num_tasks, nullptr,
+                   (vx_kernel_func_cb)ghash_worker, &task_args);
+#else
+  // WARP mode: block_dim = threads-per-warp makes each task own a whole warp;
+  // the worker then masks down to one active thread (warp affinity).
   uint32_t block_dim = vx_num_threads();
   vx_spawn_threads(1, &arg->num_tasks, &block_dim,
                    (vx_kernel_func_cb)ghash_worker, &task_args);
+#endif
   status->completed_tasks = arg->num_tasks;
   return 0;
 }

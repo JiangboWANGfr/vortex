@@ -10,6 +10,15 @@ SRCS := $(SRC_DIR)/main.cpp
 VX_SRCS := $(SRC_DIR)/kernel.cpp
 
 GHASH_ACCEL_MODE ?= SOFTWARE
+GHASH_BENCH_DISPATCH ?= WARP
+
+ifeq ($(GHASH_BENCH_DISPATCH),LANE)
+  CONFIGS += -DGHASH_BENCH_DISPATCH_LANE
+else ifeq ($(GHASH_BENCH_DISPATCH),WARP)
+  # one chain per warp (one active thread)
+else
+  $(error unsupported GHASH_BENCH_DISPATCH=$(GHASH_BENCH_DISPATCH); supported: WARP LANE)
+endif
 
 ifeq ($(GHASH_ACCEL_MODE),NATIVE)
   # GHASH_NATIVE must reach only the kernel (VX_CFLAGS); the x86 host computes
