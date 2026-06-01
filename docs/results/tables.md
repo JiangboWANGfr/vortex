@@ -13,13 +13,13 @@
 
 ## GHASH multiplier design-space (radix sweep)
 
-| mul_radix | mul_cycles | total_bytes | cycles | cyc_per_byte | ipc | status |
-|---|---|---|---|---|---|---|
-| 1 | 130 | 32,768 | 110612 | 3.38 | 1.008480 | PASS |
-| 2 | 66 | 32,768 | 108226 | 3.3 | 1.030714 | PASS |
-| 8 | 18 | 32,768 | 108113 | 3.3 | 1.031791 | PASS |
-| 32 | 6 | 32,768 | 110334 | 3.37 | 1.011021 | PASS |
-| 128 | 3 | 32,768 | 107388 | 3.28 | 1.038757 | PASS |
+| mul_radix | mul_cycles | cycles | cyc_per_byte | driver | warps/core |
+|---|---|---|---|---|---|
+| 1 | 130 | 60157 | 7.34 | rtlsim | 1 |
+| 2 | 66 | 60137 | 7.34 | rtlsim | 1 |
+| 8 | 18 | 60137 | 7.34 | rtlsim | 1 |
+| 32 | 6 | 60137 | 7.34 | rtlsim | 1 |
+| 128 | 3 | 60137 | 7.34 | rtlsim | 1 |
 
 ## AES-256-GCM full-load size sweep
 

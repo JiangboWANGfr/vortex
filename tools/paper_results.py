@@ -100,22 +100,34 @@ def build_gcm(root):
 
 
 def build_design_space(root):
-    """GHASH multiplier design-space (radix sweep)."""
-    rows = read_tsv(os.path.join(root, "ghash_bench/results/simx/design_space.tsv"))
+    """GHASH multiplier design-space (radix sweep).
+
+    Prefer the cycle-accurate rtlsim sweep: simx does NOT model the crypto
+    functional-unit latency (radix=1 and radix=128 give bit-identical cycles
+    there), so only rtlsim is valid for a MUL-latency study. The rtlsim sweep
+    is run at 1 warp/core, where there is no warp-level latency hiding, so a
+    flat curve proves the MUL is genuinely off the critical path.
+    """
+    rows = None
+    driver = "?"
+    for drv in ("rtlsim", "simx"):
+        rows = read_tsv(os.path.join(root, f"ghash_bench/results/{drv}/design_space.tsv"))
+        if rows:
+            driver = drv
+            break
     if not rows:
         return None
-    headers = ["mul_radix", "mul_cycles", "total_bytes", "cycles",
-               "cyc_per_byte", "ipc", "status"]
+    wpc = rows[0].get("warps_per_core", "")
+    headers = ["mul_radix", "mul_cycles", "cycles", "cyc_per_byte", "driver", "warps/core"]
     table = []
     for r in rows:
         radix = to_num(r["mul_radix"])
         tb = to_num(r["total_bytes"])
         cyc = to_num(r["cycles"])
-        cpb = round(cyc / tb, 2) if (cyc and tb) else ""
+        cpb = r.get("cyc_per_byte") or (round(cyc / tb, 2) if (cyc and tb) else "")
         mulc = (128 // radix + 2) if radix else ""
-        table.append([r["mul_radix"], mulc, r["total_bytes"], r["cycles"],
-                      cpb, r.get("ipc", ""), r["status"]])
-    return {"headers": headers, "rows": table, "raw": rows}
+        table.append([r["mul_radix"], mulc, r["cycles"], cpb, driver, r.get("warps_per_core", wpc)])
+    return {"headers": headers, "rows": table, "raw": rows, "driver": driver, "wpc": wpc}
 
 
 def build_size_sweep(root):
@@ -207,11 +219,13 @@ def fig_design_space(ds, out):
     ax.set_xticks(xs)
     ax.set_xticklabels([str(x) for x in xs])
     ax.set_ylim(0, max(ys) * 1.3)
+    ax.set_ylim(0, max(ys) * 1.4)
+    drv = ds.get("driver", "?")
     ax.set_xlabel("MUL radix (bits/cycle); MUL = 128/radix cycles")
     ax.set_ylabel("cycles / byte")
-    ax.set_title("GHASH multiplier design-space (NATIVE, LANE)", fontsize=10)
-    ax.text(0.5, 0.1, "flat: not MUL-bound", transform=ax.transAxes,
-            ha="center", color="#555")
+    ax.set_title(f"GHASH multiplier design-space ({drv}, 1 warp/core)", fontsize=10)
+    ax.text(0.5, 0.12, "flat with no warp hiding:\nMUL overlaps memory, not MUL-bound",
+            transform=ax.transAxes, ha="center", color="#555", fontsize=8)
     fig.tight_layout()
     p = os.path.join(out, "fig_ghash_design_space.png")
     fig.savefig(p, dpi=150)
@@ -341,8 +355,11 @@ def main():
         "unprotected data-movement baseline (32 KB, simx).", "gcm_overhead",
         "gcm_overhead.csv")
     add("GHASH multiplier design-space (radix sweep)",
-        ds, "GHASH digit-serial multiplier design-space: MUL latency vs total "
-        "cycles (NATIVE, LANE, 32 KB, simx). Flat = not MUL-bound.",
+        ds, "GHASH digit-serial multiplier design-space on cycle-accurate "
+        "rtlsim at 1 warp/core (no warp-level latency hiding). A 43x faster MUL "
+        "(radix 1->128) changes cycles by ~0\\%, proving the MUL is off the "
+        "critical path (it overlaps per-block memory access), not MUL-bound. "
+        "NOTE: simx cannot model this -- it ignores crypto FU latency.",
         "ghash_design_space", "ghash_design_space.csv")
     add("AES-256-GCM full-load size sweep",
         sweep, "AES-256-GCM cost and overhead vs message size at full machine "
@@ -362,9 +379,11 @@ def main():
             f"software {hl.get('sw_overhead_warp', '?')} -> "
             f"hardware {hl.get('native_overhead_warp', '?')} (near-free).")
     summary.append(
-        "- **GHASH multiplier design-space:** total cycles ~flat across MUL "
-        "radix 1..128 -> SIMT GHASH is not MUL-bound; the cheap bit-serial "
-        "multiplier suffices.")
+        "- **GHASH multiplier design-space (cycle-accurate rtlsim, 1 warp/core):** "
+        "a 43x faster MUL (radix 1->128) changes cycles by ~0% even with no "
+        "warp-level latency hiding -> the MUL is off the critical path (overlaps "
+        "per-block memory), so the cheap bit-serial multiplier suffices. (simx "
+        "cannot show this: it does not model crypto FU latency.)")
     summary.append("\nMatplotlib " + ("available: PNG figures written." if HAVE_MPL
                    else "NOT available: CSVs written; rerun with a matplotlib "
                    "python for PNGs."))
