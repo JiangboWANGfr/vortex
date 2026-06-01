@@ -155,8 +155,9 @@ main() {
 
     IFS=',' read -r -a ACCEL_MODES <<< "$accel_mode_list"
     IFS=',' read -r -a DISPATCHES <<< "$dispatch_list"
+    IFS=',' read -r -a BYTES_LIST <<< "$BYTES"
 
-    local need_native=0 mode dispatch
+    local need_native=0 mode dispatch bytes
     for mode in "${ACCEL_MODES[@]}"; do
         validate_accel_mode "$mode"
         [[ "$mode" == "NATIVE" ]] && need_native=1
@@ -197,11 +198,14 @@ main() {
             done < <(join_flags)
             run_cmd "${build_args[@]}"
 
-            local log_file="$LOG_DIR/gcm-bench-${mode}-${dispatch}-${DRIVER}.log"
+            # bytes_per_task is a runtime arg (-n), so sweep sizes by re-running
+            # the same binary -- no rebuild per size.
+            for bytes in "${BYTES_LIST[@]}"; do
+            local log_file="$LOG_DIR/gcm-bench-${mode}-${dispatch}-n${bytes}-${DRIVER}.log"
             local status
             if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$DRIVER" \
                     "GCM_ACCEL_MODE=$mode" "GCM_BENCH_DISPATCH=$dispatch" \
-                    "OPTS=-t $TASKS -n $BYTES" >"$log_file" 2>&1; then
+                    "OPTS=-t $TASKS -n $bytes" >"$log_file" 2>&1; then
                 status="PASS"
             else
                 status="FAIL"
@@ -213,11 +217,12 @@ main() {
             checksum=$(extract_field "checksum" "$log_file")
             perf=$(extract_perf "$log_file")
             IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
-            key="$DRIVER|$dispatch|$TASKS|$BYTES"
+            key="$DRIVER|$dispatch|$TASKS|$bytes"
             [[ "$mode" == "UNPROTECTED" && -n "$cycles" ]] && unprot_cycles["$key"]="$cycles"
             [[ "$mode" == "SOFTWARE"    && -n "$cycles" ]] && soft_cycles["$key"]="$cycles"
 
-            rows+=("$mode"$'\t'"$dispatch"$'\t'"$DRIVER"$'\t'"$TASKS"$'\t'"$BYTES"$'\t'"${total_bytes:-}"$'\t'"$cycles"$'\t'"$ipc"$'\t'"${checksum:-}"$'\t'"$status"$'\t'"$key"$'\t'"$log_file")
+            rows+=("$mode"$'\t'"$dispatch"$'\t'"$DRIVER"$'\t'"$TASKS"$'\t'"$bytes"$'\t'"${total_bytes:-}"$'\t'"$cycles"$'\t'"$ipc"$'\t'"${checksum:-}"$'\t'"$status"$'\t'"$key"$'\t'"$log_file")
+            done
         done
     done
 

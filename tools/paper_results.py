@@ -118,6 +118,24 @@ def build_design_space(root):
     return {"headers": headers, "rows": table, "raw": rows}
 
 
+def build_size_sweep(root):
+    """Full-load AES-GCM size sweep (sweep_warp.tsv + sweep_lane.tsv)."""
+    raw = []
+    for name in ("sweep_warp.tsv", "sweep_lane.tsv"):
+        rows = read_tsv(os.path.join(root, "gcm_bench/results/simx", name))
+        if rows:
+            raw.extend(rows)
+    if not raw:
+        return None
+    headers = ["accel_mode", "dispatch", "bytes_per_task", "total_bytes",
+               "cycles", "cyc_per_byte", "gbps_1ghz", "overhead_x", "status"]
+    raw.sort(key=lambda r: (r["accel_mode"], r["dispatch"], to_num(r["bytes_per_task"]) or 0))
+    table = [[r["accel_mode"], r["dispatch"], r["bytes_per_task"], r["total_bytes"],
+              r["cycles"], r.get("cyc_per_byte", ""), r.get("gbps_1ghz", ""),
+              r.get("overhead_x", ""), r["status"]] for r in raw]
+    return {"headers": headers, "rows": table, "raw": raw}
+
+
 def build_correctness():
     """Static correctness summary (from the smoke tests)."""
     headers = ["suite", "what", "cases", "result"]
@@ -201,6 +219,68 @@ def fig_design_space(ds, out):
     return p
 
 
+def _series_by(sweep, ykey, mode_filter=None):
+    series = {}
+    for r in sweep["raw"]:
+        if mode_filter and r["accel_mode"] not in mode_filter:
+            continue
+        x = to_num(r["bytes_per_task"])
+        y = to_num(r.get(ykey, ""))
+        if x is None or y is None:
+            continue
+        k = f'{r["accel_mode"].title()} {r["dispatch"]}'
+        series.setdefault(k, []).append((x, y))
+    return {k: sorted(v) for k, v in series.items()}
+
+
+def fig_throughput_vs_size(sweep, out):
+    if not (HAVE_MPL and sweep):
+        return None
+    series = _series_by(sweep, "cyc_per_byte")
+    if not series:
+        return None
+    fig, ax = plt.subplots(figsize=(5.0, 3.2))
+    for k in sorted(series):
+        xs = [p[0] for p in series[k]]
+        ys = [p[1] for p in series[k]]
+        ax.plot(xs, ys, "o-", label=k)
+    ax.set_xscale("log", base=2)
+    ax.set_yscale("log")
+    ax.set_xlabel("bytes per stream")
+    ax.set_ylabel("cycles / byte (log)")
+    ax.set_title("AES-256-GCM cost vs message size (full load)", fontsize=10)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    p = os.path.join(out, "fig_gcm_throughput_vs_size.png")
+    fig.savefig(p, dpi=150)
+    plt.close(fig)
+    return p
+
+
+def fig_overhead_vs_size(sweep, out):
+    if not (HAVE_MPL and sweep):
+        return None
+    series = _series_by(sweep, "overhead_x", mode_filter={"NATIVE"})
+    if not series:
+        return None
+    fig, ax = plt.subplots(figsize=(5.0, 3.2))
+    for k in sorted(series):
+        xs = [p[0] for p in series[k]]
+        ys = [p[1] for p in series[k]]
+        ax.plot(xs, ys, "o-", label=k)
+    ax.set_xscale("log", base=2)
+    ax.set_xlabel("bytes per stream")
+    ax.set_ylabel("overhead x vs unprotected")
+    ax.set_title("Confidentiality overhead vs message size", fontsize=10)
+    ax.axhline(1.0, ls="--", color="#999", lw=1)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    p = os.path.join(out, "fig_gcm_overhead_vs_size.png")
+    fig.savefig(p, dpi=150)
+    plt.close(fig)
+    return p
+
+
 def fig_speedup(gcm, out):
     if not (HAVE_MPL and gcm):
         return None
@@ -242,6 +322,7 @@ def main():
 
     gcm = build_gcm(args.root)
     ds = build_design_space(args.root)
+    sweep = build_size_sweep(args.root)
     corr = build_correctness()
 
     md = ["# Vortex crypto results\n"]
@@ -263,6 +344,10 @@ def main():
         ds, "GHASH digit-serial multiplier design-space: MUL latency vs total "
         "cycles (NATIVE, LANE, 32 KB, simx). Flat = not MUL-bound.",
         "ghash_design_space", "ghash_design_space.csv")
+    add("AES-256-GCM full-load size sweep",
+        sweep, "AES-256-GCM cost and overhead vs message size at full machine "
+        "utilization (WARP t=32, LANE t=128; simx).",
+        "gcm_size_sweep", "gcm_size_sweep.csv")
     add("Correctness", corr, "Functional verification summary.",
         "correctness", "correctness.csv")
 
@@ -286,7 +371,9 @@ def main():
 
     figs = [f for f in (fig_gcm_overhead(gcm, out),
                         fig_design_space(ds, out),
-                        fig_speedup(gcm, out)) if f]
+                        fig_speedup(gcm, out),
+                        fig_throughput_vs_size(sweep, out),
+                        fig_overhead_vs_size(sweep, out)) if f]
     if figs:
         md.append("## Figures\n")
         for f in figs:
