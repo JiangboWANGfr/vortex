@@ -1,0 +1,11 @@
+qr_radix,qr_cycles,warps/core,cycles,cyc_per_block,driver,status
+1,80,1,2372436,9267.3,rtlsim,PASS
+2,40,1,2362196,9227.3,rtlsim,PASS
+4,20,1,2358362,9212.4,rtlsim,PASS
+5,16,1,2358362,9212.4,rtlsim,PASS
+8,10,1,2358362,9212.4,rtlsim,PASS
+10,8,1,2358362,9212.4,rtlsim,PASS
+16,5,1,2358362,9212.4,rtlsim,PASS
+20,4,1,2358362,9212.4,rtlsim,PASS
+40,2,1,2358362,9212.4,rtlsim,PASS
+80,1,1,2358362,9212.4,rtlsim,PASS

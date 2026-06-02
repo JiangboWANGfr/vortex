@@ -18,7 +18,7 @@ NATIVE & LANE & 32768 & 1666012 & 50.843 & 2.54$\times$ & 116.30$\times$ & PASS 
 
 \begin{table}[t]
 \centering
-\caption{GHASH digit-serial multiplier design-space on cycle-accurate rtlsim at 1 warp/core (no warp-level latency hiding). A 43x faster MUL (radix 1->128) changes cycles by ~0\%, proving the MUL is off the critical path (it overlaps per-block memory access), not MUL-bound. NOTE: simx cannot model this -- it ignores crypto FU latency.}
+\caption{GHASH digit-serial multiplier design-space on cycle-accurate rtlsim at 1 warp/core (LANE t=4; no warp-level latency hiding). A 43x faster MUL (radix 1->128) changes cycles by ~0\%, proving the MUL is off the critical path (dwarfed by per-block memory), not MUL-bound. NOTE: simx is insensitive to the radix (its coarse timing model does not expose the per-op FU result latency), so rtlsim is required.}
 \label{tab:ghash_design_space}
 \begin{tabular}{llllll}
 \toprule
@@ -63,6 +63,49 @@ UNPROTECTED & WARP & 16384 & 524288 & 8634458 & 16.469 & 0.0607 & 1.00$\times$ &
 
 \begin{table}[t]
 \centering
+\caption{ChaCha20-Poly1305 AEAD throughput and confidentiality overhead vs the unprotected data-movement baseline (cycle-accurate rtlsim). ARX + 2^130-5 counterpart to AES-256-GCM. Measured on rtlsim, not simx, which does not model the ChaCha BLOCK functional-unit latency.}
+\label{tab:chacha_aead_overhead}
+\begin{tabular}{llllllllll}
+\toprule
+accel\_mode & dispatch & total\_bytes & cycles & cyc\_per\_byte & overhead\_x & native\_speedup & checksum\_ok & driver & status \\
+\midrule
+UNPROTECTED & WARP & 2048 & 43109 & 21.049 & 1.00 &  &  & rtlsim & PASS \\
+UNPROTECTED & WARP & 8192 & 75928 & 9.269 & 1.00 &  &  & rtlsim & PASS \\
+UNPROTECTED & WARP & 32768 & 230207 & 7.025 & 1.00 &  &  & rtlsim & PASS \\
+SOFTWARE & WARP & 2048 & 193411 & 94.439 & 4.49 &  &  & rtlsim & PASS \\
+SOFTWARE & WARP & 8192 & 446748 & 54.535 & 5.88 &  &  & rtlsim & PASS \\
+SOFTWARE & WARP & 32768 & 1377496 & 42.038 & 5.98 &  &  & rtlsim & PASS \\
+NATIVE & WARP & 2048 & 76846 & 37.522 & 1.78 & 2.52 & MATCH & rtlsim & PASS \\
+NATIVE & WARP & 8192 & 119390 & 14.574 & 1.57 & 3.74 & MATCH & rtlsim & PASS \\
+NATIVE & WARP & 32768 & 286854 & 8.754 & 1.25 & 4.80 & MATCH & rtlsim & PASS \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{ChaCha20 quarter-round design-space on cycle-accurate rtlsim, compute-isolated at 1 warp/core (no warp-level latency hiding). BLOCK = 80/radix cycles; an 80x faster QR (radix 1->80) changes per-block cycles by ~0.6\% -- the QR latency (<1\% of the ~9.3k-cycle/block cost) is dwarfed by per-block memory access and the WR/RD PE interface, so the area-minimal serial QR suffices. simx is insensitive to the radix; rtlsim is required.}
+\label{tab:chacha_design_space}
+\begin{tabular}{lllllll}
+\toprule
+qr\_radix & qr\_cycles & warps/core & cycles & cyc\_per\_block & driver & status \\
+\midrule
+1 & 80 & 1 & 2372436 & 9267.3 & rtlsim & PASS \\
+2 & 40 & 1 & 2362196 & 9227.3 & rtlsim & PASS \\
+4 & 20 & 1 & 2358362 & 9212.4 & rtlsim & PASS \\
+5 & 16 & 1 & 2358362 & 9212.4 & rtlsim & PASS \\
+8 & 10 & 1 & 2358362 & 9212.4 & rtlsim & PASS \\
+10 & 8 & 1 & 2358362 & 9212.4 & rtlsim & PASS \\
+16 & 5 & 1 & 2358362 & 9212.4 & rtlsim & PASS \\
+20 & 4 & 1 & 2358362 & 9212.4 & rtlsim & PASS \\
+40 & 2 & 1 & 2358362 & 9212.4 & rtlsim & PASS \\
+80 & 1 & 1 & 2358362 & 9212.4 & rtlsim & PASS \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
 \caption{Functional verification summary.}
 \label{tab:correctness}
 \begin{tabular}{llll}
@@ -72,6 +115,8 @@ suite & what & cases & result \\
 ghash\_smoke & GF(2^128) algebraic identities & 8 & PASS (sw+native, sim$\times$+rtlsim) \\
 aes\_gcm\_smoke & NIST AES-256-GCM TC13-16 & 4 & PASS (sw+native, sim$\times$+rtlsim) \\
 gcm\_bench & sw vs native tag checksum & all & MATCH (bit-e$\times$act) \\
+chacha20poly1305\_smoke & RFC 8439 2.3.2/2.5.2/2.8.2 & 3 & PASS (sw+native, sim$\times$+rtlsim) \\
+chacha20poly1305\_bench & sw vs native tag checksum & all & MATCH (bit-e$\times$act) \\
 \bottomrule
 \end{tabular}
 \end{table}

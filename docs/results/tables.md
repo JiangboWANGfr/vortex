@@ -42,6 +42,35 @@
 | UNPROTECTED | WARP | 4096 | 131072 | 2053766 | 15.669 | 0.0638 | 1.00x | PASS |
 | UNPROTECTED | WARP | 16384 | 524288 | 8634458 | 16.469 | 0.0607 | 1.00x | PASS |
 
+## ChaCha20-Poly1305 AEAD overhead
+
+| accel_mode | dispatch | total_bytes | cycles | cyc_per_byte | overhead_x | native_speedup | checksum_ok | driver | status |
+|---|---|---|---|---|---|---|---|---|---|
+| UNPROTECTED | WARP | 2048 | 43109 | 21.049 | 1.00 |  |  | rtlsim | PASS |
+| UNPROTECTED | WARP | 8192 | 75928 | 9.269 | 1.00 |  |  | rtlsim | PASS |
+| UNPROTECTED | WARP | 32768 | 230207 | 7.025 | 1.00 |  |  | rtlsim | PASS |
+| SOFTWARE | WARP | 2048 | 193411 | 94.439 | 4.49 |  |  | rtlsim | PASS |
+| SOFTWARE | WARP | 8192 | 446748 | 54.535 | 5.88 |  |  | rtlsim | PASS |
+| SOFTWARE | WARP | 32768 | 1377496 | 42.038 | 5.98 |  |  | rtlsim | PASS |
+| NATIVE | WARP | 2048 | 76846 | 37.522 | 1.78 | 2.52 | MATCH | rtlsim | PASS |
+| NATIVE | WARP | 8192 | 119390 | 14.574 | 1.57 | 3.74 | MATCH | rtlsim | PASS |
+| NATIVE | WARP | 32768 | 286854 | 8.754 | 1.25 | 4.80 | MATCH | rtlsim | PASS |
+
+## ChaCha20 quarter-round design-space (radix sweep)
+
+| qr_radix | qr_cycles | warps/core | cycles | cyc_per_block | driver | status |
+|---|---|---|---|---|---|---|
+| 1 | 80 | 1 | 2372436 | 9267.3 | rtlsim | PASS |
+| 2 | 40 | 1 | 2362196 | 9227.3 | rtlsim | PASS |
+| 4 | 20 | 1 | 2358362 | 9212.4 | rtlsim | PASS |
+| 5 | 16 | 1 | 2358362 | 9212.4 | rtlsim | PASS |
+| 8 | 10 | 1 | 2358362 | 9212.4 | rtlsim | PASS |
+| 10 | 8 | 1 | 2358362 | 9212.4 | rtlsim | PASS |
+| 16 | 5 | 1 | 2358362 | 9212.4 | rtlsim | PASS |
+| 20 | 4 | 1 | 2358362 | 9212.4 | rtlsim | PASS |
+| 40 | 2 | 1 | 2358362 | 9212.4 | rtlsim | PASS |
+| 80 | 1 | 1 | 2358362 | 9212.4 | rtlsim | PASS |
+
 ## Correctness
 
 | suite | what | cases | result |
@@ -49,6 +78,8 @@
 | ghash_smoke | GF(2^128) algebraic identities | 8 | PASS (sw+native, simx+rtlsim) |
 | aes_gcm_smoke | NIST AES-256-GCM TC13-16 | 4 | PASS (sw+native, simx+rtlsim) |
 | gcm_bench | sw vs native tag checksum | all | MATCH (bit-exact) |
+| chacha20poly1305_smoke | RFC 8439 2.3.2/2.5.2/2.8.2 | 3 | PASS (sw+native, simx+rtlsim) |
+| chacha20poly1305_bench | sw vs native tag checksum | all | MATCH (bit-exact) |
 
 ## Figures
 
@@ -61,4 +92,10 @@
 ![fig_gcm_throughput_vs_size.png](fig_gcm_throughput_vs_size.png)
 
 ![fig_gcm_overhead_vs_size.png](fig_gcm_overhead_vs_size.png)
+
+![fig_chacha_aead_overhead.png](fig_chacha_aead_overhead.png)
+
+![fig_chacha_design_space.png](fig_chacha_design_space.png)
+
+![fig_combined_design_space.png](fig_combined_design_space.png)
 

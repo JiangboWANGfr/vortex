@@ -1,0 +1,261 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+if [[ -f "$SCRIPT_DIR/runner_common.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh"
+else
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh.in"
+fi
+
+show_usage() {
+    cat <<EOF
+Vortex ChaCha20-Poly1305 AEAD Benchmark Runner
+(ARX + 2^130-5 counterpart to gcm_bench: SPN + GF(2^128))
+
+Two modes:
+  --mode=overhead : accel-mode x message-size sweep (UNPROTECTED/SOFTWARE/NATIVE),
+                    driver built once. Writes results.tsv with overhead_x and the
+                    SOFTWARE-vs-NATIVE checksum cross-check. Use --driver=rtlsim:
+                    simx is insensitive to the crypto-FU (BLOCK) latency (its
+                    coarse timing model does not expose it), so on simx NATIVE
+                    looks artificially free.
+  --mode=radix    : NATIVE-only CHACHA_QR_RADIX sweep, RTLSIM ONLY (simx is
+                    insensitive to the radix). Rebuilds librtlsim per radix
+                    (BLOCK = 80/radix cycles), forces the compute-isolated
+                    ChaCha-only kernel, and defaults to 1 warp/core (-t 1, no
+                    warp-level latency hiding). Writes design_space.tsv.
+
+Usage: $0 [options]
+
+Options:
+  --mode=<overhead|radix>        (default: overhead)
+  --driver=<simx|rtlsim|de10pro> (default: rtlsim; radix forces rtlsim)
+  --accel-modes=<csv>            overhead (default: UNPROTECTED,SOFTWARE,NATIVE)
+  --dispatch=<csv>               WARP,LANE (default: WARP)
+  --qr-radix=<csv>               radix mode; must divide 80
+                                 (default: 1,2,4,5,8,10,16,20,40,80)
+  --tasks=<n>                    streams (default: 32 overhead, 8 radix)
+  --bytes=<csv>                  bytes/stream, multiple of 16 (overhead; default 256,1024)
+  --iters=<n>                    compute-only iterations (radix; default 256)
+  --output-root=<path>          default: <build>/runner_output
+  --results=<path>              default depends on mode
+  --log-dir=<path>
+  --startup-addr=<hex>
+  --ext-f-disable / --ext-d-disable / --fd-disable
+  --debug=<level>               (default: 0)
+  --help
+
+Examples:
+  $0 --mode=overhead --driver=rtlsim --bytes=256,1024 --fd-disable
+  $0 --mode=radix    --driver=rtlsim --qr-radix=1,2,4,5,8,10,16,20,40,80 --fd-disable
+EOF
+}
+
+validate_accel_mode() {
+    case "$1" in
+        UNPROTECTED|SOFTWARE|NATIVE) ;;
+        *) die "unsupported CHACHA20POLY1305_ACCEL_MODE=$1; supported: UNPROTECTED SOFTWARE NATIVE" ;;
+    esac
+}
+
+validate_dispatch() {
+    case "$1" in
+        WARP|LANE) ;;
+        *) die "unsupported CHACHA_BENCH_DISPATCH=$1; supported: WARP LANE" ;;
+    esac
+}
+
+validate_radix() {
+    # HW asserts (80 % QR_RADIX) == 0; BLOCK = 80/radix cycles.
+    case "$1" in
+        1|2|4|5|8|10|16|20|40|80) ;;
+        *) die "unsupported CHACHA_QR_RADIX=$1; must divide 80 (1 2 4 5 8 10 16 20 40 80)" ;;
+    esac
+}
+
+# Hardware ChaCha + Poly1305 PEs are compiled into the driver only with
+# -DEXT_CHACHA_ENABLE -DEXT_POLY1305_ENABLE. The QR radix is baked into the RTL
+# QR core, so it reaches the verilated model via CONFIGS (rtlsim).
+build_native_driver() {
+    local cfg="-DEXT_CHACHA_ENABLE -DEXT_POLY1305_ENABLE"
+    [[ -n "${1:-}" && "$1" != "1" ]] && cfg="$cfg -DCHACHA_QR_RADIX=$1"
+    build_driver_runtime_common "$DRIVER" 5000 "CONFIGS=$cfg"
+}
+
+extract_field() {
+    grep -a "^CHACHA_BENCH: .*${1}=" "$2" | tail -n 1 \
+        | sed -nE "s/.*${1}=([0-9a-fx]+).*/\\1/p" || true
+}
+
+extract_perf() {
+    local line
+    line=$(grep -a 'PERF: instrs=' "$1" | tail -n 1 || true)
+    if [[ -z "$line" ]]; then printf '\t\t'; return; fi
+    printf '%s' "$line" | sed -E 's/.*instrs=([0-9,]+), cycles=([0-9,]+), IPC=([0-9.]+).*/\1\t\2\t\3/' | tr -d ','
+}
+
+ratio_x() { [[ -z "${1:-}" || -z "${2:-}" || "$2" == "0" ]] && { printf ''; return; }; perl -e 'printf("%.2f",$ARGV[0]/$ARGV[1])' "$1" "$2"; }
+ratio_f() { [[ -z "${1:-}" || -z "${2:-}" || "$2" == "0" ]] && { printf ''; return; }; perl -e 'printf("%.3f",$ARGV[0]/$ARGV[1])' "$1" "$2"; }
+
+run_overhead() {
+    local app_dir="$ROOT_DIR/tests/regression/chacha20poly1305_bench"
+    local need_native=0 mode dispatch bytes
+    for mode in "${ACCEL_MODES[@]}"; do validate_accel_mode "$mode"; [[ "$mode" == "NATIVE" ]] && need_native=1; done
+    for dispatch in "${DISPATCHES[@]}"; do validate_dispatch "$dispatch"; done
+
+    [[ "$need_native" -eq 1 ]] && build_native_driver "1" || build_driver_runtime_common "$DRIVER" 5000
+
+    local failures=0
+    local -a rows=()
+    declare -A unprot=() soft=() cks=()
+
+    for mode in "${ACCEL_MODES[@]}"; do
+        for dispatch in "${DISPATCHES[@]}"; do
+            local build_args=("make" "-C" "$app_dir" "clean" "all" "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR"
+                              "CHACHA20POLY1305_ACCEL_MODE=$mode" "CHACHA_BENCH_DISPATCH=$dispatch")
+            while IFS= read -r f; do [[ -n "$f" ]] && build_args+=("$f"); done < <(join_flags)
+            run_cmd "${build_args[@]}"
+            for bytes in "${BYTES_LIST[@]}"; do
+                local log="$LOG_DIR/ccp-${mode}-${dispatch}-n${bytes}-${DRIVER}.log" status
+                if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$DRIVER" \
+                        "CHACHA20POLY1305_ACCEL_MODE=$mode" "CHACHA_BENCH_DISPATCH=$dispatch" \
+                        "OPTS=-t $TASKS -n $bytes" >"$log" 2>&1; then status="PASS"; else status="FAIL"; failures=$((failures+1)); fi
+                local tb ck perf instrs cycles ipc key
+                tb=$(extract_field total_bytes "$log"); ck=$(extract_field checksum "$log")
+                perf=$(extract_perf "$log"); IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
+                key="$dispatch|$bytes"
+                [[ "$mode" == "UNPROTECTED" && -n "$cycles" ]] && unprot["$key"]="$cycles"
+                [[ "$mode" == "SOFTWARE"    && -n "$cycles" ]] && soft["$key"]="$cycles"
+                [[ "$mode" != "UNPROTECTED" ]] && cks["$key|$mode"]="$ck"
+                rows+=("$mode"$'\t'"$dispatch"$'\t'"$bytes"$'\t'"${tb:-}"$'\t'"$instrs"$'\t'"$cycles"$'\t'"$ipc"$'\t'"${ck:-}"$'\t'"$status"$'\t'"$key"$'\t'"$log")
+            done
+        done
+    done
+
+    printf 'algo\taccel_mode\tdispatch\tdriver\tnum_tasks\tbytes_per_task\ttotal_bytes\tinstrs\tcycles\tcyc_per_byte\toverhead_x\tnative_speedup\tipc\tchecksum\tchecksum_ok\tstatus\tlog\n' > "$RESULTS"
+    local row
+    for row in "${rows[@]}"; do
+        IFS=$'\t' read -r mode dispatch bytes tb instrs cycles ipc ck status key log <<< "$row"
+        local cpb="" ovh="" nsp="" ckok=""
+        [[ -n "$cycles" && -n "$tb" ]] && cpb=$(ratio_f "$cycles" "$tb")
+        [[ -n "$cycles" && -n "${unprot[$key]:-}" ]] && ovh=$(ratio_x "$cycles" "${unprot[$key]}")
+        [[ "$mode" == "NATIVE" && -n "$cycles" && -n "${soft[$key]:-}" ]] && nsp=$(ratio_x "${soft[$key]}" "$cycles")
+        if [[ "$mode" == "NATIVE" ]]; then
+            local sw="${cks[$key|SOFTWARE]:-}" nt="${cks[$key|NATIVE]:-}"
+            [[ -n "$sw" && -n "$nt" ]] && { [[ "$sw" == "$nt" ]] && ckok="MATCH" || ckok="MISMATCH"; }
+        fi
+        printf 'chacha20poly1305\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$mode" "$dispatch" "$DRIVER" "$TASKS" "$bytes" "$tb" "$instrs" "$cycles" "$cpb" "$ovh" "$nsp" "$ipc" "$ck" "$ckok" "$status" "$log" >> "$RESULTS"
+    done
+    echo "ChaCha20-Poly1305 AEAD overhead -> $RESULTS"
+    [[ "$failures" -eq 0 ]]
+}
+
+run_radix() {
+    [[ "$DRIVER" == "rtlsim" ]] || die "radix mode requires --driver=rtlsim (simx is insensitive to the FU latency)"
+    local app_dir="$ROOT_DIR/tests/regression/chacha20poly1305_bench"
+    local radix dispatch
+    for radix in "${QR_RADICES[@]}"; do validate_radix "$radix"; done
+    for dispatch in "${DISPATCHES[@]}"; do validate_dispatch "$dispatch"; done
+
+    local failures=0
+    local -a rows=()
+    for radix in "${QR_RADICES[@]}"; do
+        build_native_driver "$radix"   # rebuild librtlsim with this QR radix
+        for dispatch in "${DISPATCHES[@]}"; do
+            local build_args=("make" "-C" "$app_dir" "clean" "all" "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR"
+                              "CHACHA20POLY1305_ACCEL_MODE=NATIVE" "CHACHA_BENCH_DISPATCH=$dispatch"
+                              "CHACHA_BENCH_COMPUTE_ONLY=1" "CHACHA_BENCH_ITERS=$ITERS")
+            while IFS= read -r f; do [[ -n "$f" ]] && build_args+=("$f"); done < <(join_flags)
+            run_cmd "${build_args[@]}"
+            local log="$LOG_DIR/ccp-radix-${dispatch}-r${radix}-${DRIVER}.log" status
+            if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$DRIVER" \
+                    "CHACHA20POLY1305_ACCEL_MODE=NATIVE" "CHACHA_BENCH_DISPATCH=$dispatch" \
+                    "CHACHA_BENCH_COMPUTE_ONLY=1" "CHACHA_BENCH_ITERS=$ITERS" \
+                    "OPTS=-t $TASKS -n 64" >"$log" 2>&1; then status="PASS"; else status="FAIL"; failures=$((failures+1)); fi
+            local perf instrs cycles ipc
+            perf=$(extract_perf "$log"); IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
+            rows+=("$dispatch"$'\t'"$radix"$'\t'"$((80/radix))"$'\t'"$instrs"$'\t'"$cycles"$'\t'"$ipc"$'\t'"$status"$'\t'"$log")
+        done
+    done
+
+    printf 'algo\taccel_mode\tdispatch\tqr_radix\tqr_cycles\tdriver\tnum_tasks\titers\tinstrs\tcycles\tipc\tstatus\tlog\n' > "$RESULTS"
+    local row
+    for row in "${rows[@]}"; do
+        IFS=$'\t' read -r dispatch radix qrc instrs cycles ipc status log <<< "$row"
+        printf 'chacha20\tNATIVE\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$dispatch" "$radix" "$qrc" "$DRIVER" "$TASKS" "$ITERS" "$instrs" "$cycles" "$ipc" "$status" "$log" >> "$RESULTS"
+    done
+    echo "ChaCha20 QR design-space -> $RESULTS"
+    [[ "$failures" -eq 0 ]]
+}
+
+main() {
+    RUNNER_NAME="chacha20poly1305_bench"
+    MODE="overhead"; DRIVER="rtlsim"; STARTUP_ADDR=""
+    EXT_F_DISABLE=0; EXT_D_DISABLE=0; DEBUG_LEVEL=0
+    TASKS=""; BYTES="256,1024"; QR_RADIX="1,2,4,5,8,10,16,20,40,80"; ITERS=256
+    OUTPUT_ROOT="$ROOT_DIR/runner_output"; RESULTS=""; LOG_DIR=""
+    local accel_list="UNPROTECTED,SOFTWARE,NATIVE" dispatch_list="WARP"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --mode=*) MODE="${1#*=}" ;;
+            --driver=*) DRIVER="${1#*=}" ;;
+            --accel-modes=*) accel_list="${1#*=}" ;;
+            --dispatch=*) dispatch_list="${1#*=}" ;;
+            --qr-radix=*) QR_RADIX="${1#*=}" ;;
+            --tasks=*) TASKS="${1#*=}" ;;
+            --bytes=*) BYTES="${1#*=}" ;;
+            --iters=*) ITERS="${1#*=}" ;;
+            --output-root=*) OUTPUT_ROOT="${1#*=}" ;;
+            --results=*) RESULTS="${1#*=}" ;;
+            --log-dir=*) LOG_DIR="${1#*=}" ;;
+            --startup-addr=*) STARTUP_ADDR="${1#*=}" ;;
+            --ext-f-disable) EXT_F_DISABLE=1 ;;
+            --ext-d-disable) EXT_D_DISABLE=1 ;;
+            --fd-disable) EXT_F_DISABLE=1; EXT_D_DISABLE=1 ;;
+            --debug=*) DEBUG_LEVEL="${1#*=}" ;;
+            --help|-h) show_usage; exit 0 ;;
+            *) die "unknown option: $1" ;;
+        esac
+        shift
+    done
+
+    validate_driver "$DRIVER"
+    IFS=',' read -r -a ACCEL_MODES <<< "$accel_list"
+    IFS=',' read -r -a DISPATCHES <<< "$dispatch_list"
+    IFS=',' read -r -a QR_RADICES <<< "$QR_RADIX"
+    IFS=',' read -r -a BYTES_LIST <<< "$BYTES"
+    # radix mode defaults to 1 warp/core (-t 1: 1 group -> 1 warp -> 1 core, no
+    # warp-level latency hiding). overhead defaults to 32 streams (full machine).
+    [[ -z "$TASKS" ]] && { [[ "$MODE" == "radix" ]] && TASKS=1 || TASKS=32; }
+
+    load_xlen
+    set_default_startup_addr
+    source_toolchain_env
+
+    if [[ -z "$RESULTS" && "$MODE" == "radix" ]]; then
+        RESULTS="$OUTPUT_ROOT/$RUNNER_NAME/results/$DRIVER/design_space.tsv"
+    fi
+    init_single_driver_output
+
+    echo "MODE=$MODE DRIVER=$DRIVER XLEN=$XLEN TASKS=$TASKS"
+    echo "ACCEL=${ACCEL_MODES[*]} DISPATCH=${DISPATCHES[*]} BYTES=$BYTES QR_RADIX=$QR_RADIX ITERS=$ITERS"
+    echo "RESULTS=$RESULTS"
+
+    run_cmd make -C "$ROOT_DIR/hw" config
+    build_kernel
+
+    case "$MODE" in
+        overhead) run_overhead ;;
+        radix)    run_radix ;;
+        *) die "unknown --mode=$MODE; supported: overhead radix" ;;
+    esac
+}
+
+main "$@"

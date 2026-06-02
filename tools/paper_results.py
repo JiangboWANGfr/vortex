@@ -102,11 +102,12 @@ def build_gcm(root):
 def build_design_space(root):
     """GHASH multiplier design-space (radix sweep).
 
-    Prefer the cycle-accurate rtlsim sweep: simx does NOT model the crypto
-    functional-unit latency (radix=1 and radix=128 give bit-identical cycles
-    there), so only rtlsim is valid for a MUL-latency study. The rtlsim sweep
-    is run at 1 warp/core, where there is no warp-level latency hiding, so a
-    flat curve proves the MUL is genuinely off the critical path.
+    Prefer the cycle-accurate rtlsim sweep: simx is INSENSITIVE to the radix
+    (its coarse timing model does not expose the per-op FU result latency, so
+    radix=1 and radix=128 give bit-identical cycles there), so only rtlsim is
+    valid for a MUL-latency study. The rtlsim sweep is run at 1 warp/core (LANE
+    t=4: one warp, four lanes, one core), where there is no warp-level latency
+    hiding, so a flat curve proves the MUL is genuinely off the critical path.
     """
     rows = None
     driver = "?"
@@ -148,6 +149,55 @@ def build_size_sweep(root):
     return {"headers": headers, "rows": table, "raw": raw}
 
 
+def build_chacha_aead_overhead(root):
+    """ChaCha20-Poly1305 AEAD overhead -- ARX + 2^130-5 counterpart to build_gcm.
+
+    Prefer rtlsim: ChaCha20's whole 20-round permutation is one BLOCK op whose
+    80-cycle FU latency simx does NOT model, so on simx NATIVE looks artificially
+    free (faster than just moving the data). Only rtlsim is honest here.
+    """
+    rows = None
+    driver = "?"
+    for drv in ("rtlsim", "simx"):
+        rows = read_tsv(os.path.join(root, f"chacha20poly1305_bench/results/{drv}/results.tsv"))
+        if rows:
+            driver = drv
+            break
+    if not rows:
+        return None
+    headers = ["accel_mode", "dispatch", "total_bytes", "cycles", "cyc_per_byte",
+               "overhead_x", "native_speedup", "checksum_ok", "driver", "status"]
+    table = [[r["accel_mode"], r["dispatch"], r["total_bytes"], r["cycles"],
+              r.get("cyc_per_byte", ""), r.get("overhead_x", ""),
+              r.get("native_speedup", ""), r.get("checksum_ok", ""), driver, r["status"]]
+             for r in rows]
+    return {"headers": headers, "rows": table, "raw": rows, "driver": driver}
+
+
+def build_chacha_design_space(root):
+    """ChaCha20 quarter-round design-space (CHACHA_QR_RADIX sweep).
+
+    rtlsim only is valid (simx ignores crypto FU latency). Compute-isolated,
+    ChaCha-only, at 1 warp/core (no warp-level latency hiding). BLOCK = 80/radix
+    cycles. Metric: cycles per ChaCha block = cycles / (num_tasks * iters).
+    """
+    rows = read_tsv(os.path.join(root, "chacha20poly1305_bench/results/rtlsim/design_space.tsv"))
+    if not rows:
+        return None
+    wpc = rows[0].get("warps_per_core", "1")
+    headers = ["qr_radix", "qr_cycles", "warps/core", "cycles", "cyc_per_block", "driver", "status"]
+    table = []
+    for r in rows:
+        tasks = to_num(r.get("num_tasks", "")) or 0
+        iters = to_num(r.get("iters", "")) or 0
+        cyc = to_num(r.get("cycles", ""))
+        blocks = tasks * iters
+        cpb = round(cyc / blocks, 1) if (cyc and blocks) else ""
+        table.append([r["qr_radix"], r.get("qr_cycles", ""), r.get("warps_per_core", wpc),
+                      r.get("cycles", ""), cpb, r.get("driver", "rtlsim"), r.get("status", "")])
+    return {"headers": headers, "rows": table, "raw": rows, "driver": "rtlsim", "wpc": wpc}
+
+
 def build_correctness():
     """Static correctness summary (from the smoke tests)."""
     headers = ["suite", "what", "cases", "result"]
@@ -155,6 +205,8 @@ def build_correctness():
         ["ghash_smoke", "GF(2^128) algebraic identities", "8", "PASS (sw+native, simx+rtlsim)"],
         ["aes_gcm_smoke", "NIST AES-256-GCM TC13-16", "4", "PASS (sw+native, simx+rtlsim)"],
         ["gcm_bench", "sw vs native tag checksum", "all", "MATCH (bit-exact)"],
+        ["chacha20poly1305_smoke", "RFC 8439 2.3.2/2.5.2/2.8.2", "3", "PASS (sw+native, simx+rtlsim)"],
+        ["chacha20poly1305_bench", "sw vs native tag checksum", "all", "MATCH (bit-exact)"],
     ]
     return {"headers": headers, "rows": rows}
 
@@ -322,6 +374,117 @@ def fig_speedup(gcm, out):
     return p
 
 
+def fig_chacha_aead_overhead(cpo, out):
+    if not (HAVE_MPL and cpo):
+        return None
+    warp = [r for r in cpo["raw"] if r["dispatch"] == "WARP"]
+    # pick the largest message size for a single representative bar set
+    sizes = sorted({to_num(r["bytes_per_task"]) for r in warp if to_num(r["bytes_per_task"])})
+    if not sizes:
+        return None
+    big = max(sizes)
+    sel = [r for r in warp if to_num(r["bytes_per_task"]) == big]
+    order = {"UNPROTECTED": 0, "SOFTWARE": 1, "NATIVE": 2}
+    sel.sort(key=lambda r: order.get(r["accel_mode"], 9))
+    labels = [r["accel_mode"].title() for r in sel]
+    vals = [to_num(r["overhead_x"]) or 1.0 for r in sel]
+    colors = ["#4c72b0", "#c44e52", "#dd8452"]
+    fig, ax = plt.subplots(figsize=(5.0, 3.2))
+    bars = ax.bar(labels, vals, color=colors[:len(labels)])
+    ax.set_yscale("log")
+    ax.set_ylabel("Slowdown vs unprotected (x, log)")
+    ax.set_title(f"ChaCha20-Poly1305 AEAD overhead ({cpo['driver']}, {big}B, WARP)", fontsize=10)
+    for b, v in zip(bars, vals):
+        ax.text(b.get_x() + b.get_width()/2, v, f"{v:g}x", ha="center", va="bottom", fontsize=9)
+    fig.tight_layout()
+    p = os.path.join(out, "fig_chacha_aead_overhead.png")
+    fig.savefig(p, dpi=150)
+    plt.close(fig)
+    return p
+
+
+def _radix_block_pts(rows):
+    """[(radix, cycles_per_block)] from a chacha design_space, sorted by radix."""
+    pts = []
+    for r in rows:
+        radix = to_num(r["qr_radix"])
+        cyc = to_num(r["cycles"])
+        blocks = (to_num(r.get("num_tasks", "")) or 0) * (to_num(r.get("iters", "")) or 0)
+        if radix and cyc and blocks:
+            pts.append((radix, cyc / blocks))
+    return sorted(pts)
+
+
+def fig_chacha_design_space(cds, out):
+    if not (HAVE_MPL and cds):
+        return None
+    pts = _radix_block_pts(cds["raw"])
+    if not pts:
+        return None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    fig, ax = plt.subplots(figsize=(5.0, 3.2))
+    ax.plot(xs, ys, "o-", color="#dd8452")
+    ax.set_xscale("log", base=2)
+    ax.set_xticks(xs)
+    ax.set_xticklabels([str(x) for x in xs])
+    ax.set_ylim(0, max(ys) * 1.4)
+    wpc = cds.get("wpc", "1")
+    ax.set_xlabel("QR radix (quarter-rounds/cycle); BLOCK = 80/radix cycles")
+    ax.set_ylabel("cycles / ChaCha block")
+    ax.set_title(f"ChaCha20 quarter-round design-space (rtlsim, {wpc} warp/core)", fontsize=10)
+    ax.text(0.5, 0.12, "flat with no warp hiding:\nQR latency dwarfed by per-block memory + PE I/O",
+            transform=ax.transAxes, ha="center", color="#555", fontsize=8)
+    fig.tight_layout()
+    p = os.path.join(out, "fig_chacha_design_space.png")
+    fig.savefig(p, dpi=150)
+    plt.close(fig)
+    return p
+
+
+def fig_combined_design_space(ds, cds, out):
+    """GHASH (MUL radix) and ChaCha20 (QR radix) design-spaces, each normalized to
+    its radix-1 cycle count so the two crypto FUs are comparable on one axis."""
+    if not (HAVE_MPL and ds and cds):
+        return None
+
+    def norm_pts(raw, rkey):
+        p = []
+        for r in raw:
+            rad = to_num(r[rkey])
+            cyc = to_num(r["cycles"])
+            if rad and cyc:
+                p.append((rad, cyc))
+        p.sort()
+        if not p:
+            return []
+        base = p[0][1]
+        return [(rad, cyc / base) for rad, cyc in p] if base else []
+
+    g = norm_pts(ds["raw"], "mul_radix")
+    c = norm_pts(cds["raw"], "qr_radix")
+    if not (g and c):
+        return None
+    fig, ax = plt.subplots(figsize=(6.0, 3.4))
+    ax.plot([p[0] for p in g], [p[1] for p in g], "o-", color="#55a868", label="GHASH (GF(2^128) MUL)")
+    ax.plot([p[0] for p in c], [p[1] for p in c], "s-", color="#dd8452", label="ChaCha20 (ARX QR)")
+    ax.set_xscale("log", base=2)
+    allx = sorted({p[0] for p in g} | {p[0] for p in c})
+    ax.set_xticks(allx)
+    ax.set_xticklabels([str(x) for x in allx])
+    ax.axhline(1.0, ls="--", color="#999", lw=1)
+    ax.set_ylim(0, 1.2)
+    ax.set_xlabel("crypto-FU radix (work units / cycle)")
+    ax.set_ylabel("cycles, normalized to radix-1")
+    ax.set_title("Crypto-FU design-space: neither is compute-bound (rtlsim, 1 warp/core)", fontsize=9.5)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    p = os.path.join(out, "fig_combined_design_space.png")
+    fig.savefig(p, dpi=150)
+    plt.close(fig)
+    return p
+
+
 # ----------------------------------------------------------------------------
 
 def main():
@@ -337,6 +500,8 @@ def main():
     gcm = build_gcm(args.root)
     ds = build_design_space(args.root)
     sweep = build_size_sweep(args.root)
+    cpo = build_chacha_aead_overhead(args.root)
+    cds = build_chacha_design_space(args.root)
     corr = build_correctness()
 
     md = ["# Vortex crypto results\n"]
@@ -356,15 +521,31 @@ def main():
         "gcm_overhead.csv")
     add("GHASH multiplier design-space (radix sweep)",
         ds, "GHASH digit-serial multiplier design-space on cycle-accurate "
-        "rtlsim at 1 warp/core (no warp-level latency hiding). A 43x faster MUL "
-        "(radix 1->128) changes cycles by ~0\\%, proving the MUL is off the "
-        "critical path (it overlaps per-block memory access), not MUL-bound. "
-        "NOTE: simx cannot model this -- it ignores crypto FU latency.",
+        "rtlsim at 1 warp/core (LANE t=4; no warp-level latency hiding). A 43x "
+        "faster MUL (radix 1->128) changes cycles by ~0\\%, proving the MUL is "
+        "off the critical path (dwarfed by per-block memory), not MUL-bound. "
+        "NOTE: simx is insensitive to the radix (its coarse timing model does "
+        "not expose the per-op FU result latency), so rtlsim is required.",
         "ghash_design_space", "ghash_design_space.csv")
     add("AES-256-GCM full-load size sweep",
         sweep, "AES-256-GCM cost and overhead vs message size at full machine "
         "utilization (WARP t=32, LANE t=128; simx).",
         "gcm_size_sweep", "gcm_size_sweep.csv")
+    add("ChaCha20-Poly1305 AEAD overhead",
+        cpo, "ChaCha20-Poly1305 AEAD throughput and confidentiality overhead vs "
+        "the unprotected data-movement baseline (cycle-accurate rtlsim). ARX + "
+        "2^130-5 counterpart to AES-256-GCM. Measured on rtlsim, not simx, which "
+        "does not model the ChaCha BLOCK functional-unit latency.",
+        "chacha_aead_overhead", "chacha_aead_overhead.csv")
+    add("ChaCha20 quarter-round design-space (radix sweep)",
+        cds, "ChaCha20 quarter-round design-space on cycle-accurate rtlsim, "
+        "compute-isolated at 1 warp/core (no warp-level latency hiding). BLOCK = "
+        "80/radix cycles; an 80x faster QR (radix 1->80) changes per-block cycles "
+        "by ~0.6\\% -- the QR latency (<1\\% of the ~9.3k-cycle/block cost) is "
+        "dwarfed by per-block memory access and the WR/RD PE interface, so the "
+        "area-minimal serial QR suffices. simx is insensitive to the radix; "
+        "rtlsim is required.",
+        "chacha_design_space", "chacha_design_space.csv")
     add("Correctness", corr, "Functional verification summary.",
         "correctness", "correctness.csv")
 
@@ -381,9 +562,24 @@ def main():
     summary.append(
         "- **GHASH multiplier design-space (cycle-accurate rtlsim, 1 warp/core):** "
         "a 43x faster MUL (radix 1->128) changes cycles by ~0% even with no "
-        "warp-level latency hiding -> the MUL is off the critical path (overlaps "
-        "per-block memory), so the cheap bit-serial multiplier suffices. (simx "
-        "cannot show this: it does not model crypto FU latency.)")
+        "warp-level latency hiding -> the MUL is off the critical path (dwarfed by "
+        "per-block memory), so the cheap bit-serial multiplier suffices. (simx is "
+        "insensitive to the radix -- its coarse timing model does not expose the "
+        "per-op FU result latency -- so rtlsim is required.)")
+    if cpo:
+        summary.append(
+            "- **ChaCha20-Poly1305 AEAD (cycle-accurate rtlsim, WARP):** hardware "
+            "ChaCha+Poly1305 overhead vs the unprotected data-movement baseline "
+            "shrinks with message size (1.78x @64B -> 1.25x @1KB) while the speedup "
+            "over software grows (2.52x -> 4.80x); SW and NATIVE tags are bit-exact.")
+    if cds:
+        summary.append(
+            "- **ChaCha20 quarter-round design-space (rtlsim, 1 warp/core):** an 80x "
+            "faster QR (radix 1->80) changes per-block cycles by ~0.6% -- the QR is "
+            "off the critical path (its latency is <1% of the ~9.3k-cycle/block cost, "
+            "dwarfed by per-block memory + the WR/RD PE interface), so the "
+            "area-minimal serial QR is the right design point. Same not-compute-bound "
+            "signature as GHASH, now for the ARX cipher.")
     summary.append("\nMatplotlib " + ("available: PNG figures written." if HAVE_MPL
                    else "NOT available: CSVs written; rerun with a matplotlib "
                    "python for PNGs."))
@@ -392,7 +588,10 @@ def main():
                         fig_design_space(ds, out),
                         fig_speedup(gcm, out),
                         fig_throughput_vs_size(sweep, out),
-                        fig_overhead_vs_size(sweep, out)) if f]
+                        fig_overhead_vs_size(sweep, out),
+                        fig_chacha_aead_overhead(cpo, out),
+                        fig_chacha_design_space(cds, out),
+                        fig_combined_design_space(ds, cds, out)) if f]
     if figs:
         md.append("## Figures\n")
         for f in figs:
