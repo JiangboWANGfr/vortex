@@ -20,6 +20,18 @@ else
   $(error unsupported GHASH_BENCH_DISPATCH=$(GHASH_BENCH_DISPATCH); supported: WARP LANE)
 endif
 
+# Data layout: TASK_MAJOR (default, each stream contiguous) vs INTERLEAVED
+# (block-major: same block index of all streams adjacent, so a warp's lanes
+# coalesce into one cache line). Must reach both host and kernel.
+GHASH_BENCH_LAYOUT ?= TASK_MAJOR
+ifeq ($(GHASH_BENCH_LAYOUT),INTERLEAVED)
+  CONFIGS += -DGHASH_BENCH_INTERLEAVE
+else ifeq ($(GHASH_BENCH_LAYOUT),TASK_MAJOR)
+  # streams stored contiguously
+else
+  $(error unsupported GHASH_BENCH_LAYOUT=$(GHASH_BENCH_LAYOUT); supported: TASK_MAJOR INTERLEAVED)
+endif
+
 ifeq ($(GHASH_ACCEL_MODE),NATIVE)
   # GHASH_NATIVE must reach only the kernel (VX_CFLAGS); the x86 host computes
   # expected tags with the software reference and cannot emit RISC-V intrinsics.

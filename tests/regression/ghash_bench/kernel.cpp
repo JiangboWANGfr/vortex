@@ -27,6 +27,7 @@ struct TaskArgs {
   const uint8_t* H;
   uint8_t* tags;
   uint32_t blocks_per_task;
+  uint32_t num_tasks;
 };
 
 void ghash_worker(const TaskArgs* __UNIFORM__ args) {
@@ -36,12 +37,29 @@ void ghash_worker(const TaskArgs* __UNIFORM__ args) {
 #endif
 
   uint32_t task_id = blockIdx.x;
-  const uint8_t* data = args->data
-      + (uint64_t)task_id * args->blocks_per_task * GHASH_BLOCK_BYTES;
   uint8_t* tag = args->tags + (uint64_t)task_id * GHASH_BLOCK_BYTES;
 
+#ifdef GHASH_BENCH_INTERLEAVE
+  // Block-major layout: block i of task t lives at (i*num_tasks + t)*16, so the
+  // NUM_THREADS lanes of a warp (adjacent task_ids) read 16B-apart addresses
+  // that fall in one 64B cache line -> coalesced load. Each lane's own chain is
+  // strided by num_tasks*16 across blocks.
+  ghash_ctx_t ctx;
+  ghash_init(&ctx, args->H);
+  uint32_t nt = args->num_tasks;
+  uint32_t nb = args->blocks_per_task;
+  for (uint32_t i = 0; i < nb; ++i) {
+    const uint8_t* blk = args->data
+        + (uint64_t)((uint64_t)i * nt + task_id) * GHASH_BLOCK_BYTES;
+    ghash_update_block(&ctx, blk);
+  }
+  ghash_final(&ctx, tag);
+#else
+  const uint8_t* data = args->data
+      + (uint64_t)task_id * args->blocks_per_task * GHASH_BLOCK_BYTES;
   ghash_oneshot(args->H, data,
                 (uint64_t)args->blocks_per_task * GHASH_BLOCK_BYTES, tag);
+#endif
 }
 
 } // namespace
@@ -64,6 +82,7 @@ int main() {
     (const uint8_t*)(uintptr_t)arg->h_addr,
     (uint8_t*)(uintptr_t)arg->tag_addr,
     arg->blocks_per_task,
+    arg->num_tasks,
   };
 
 #ifdef GHASH_BENCH_DISPATCH_LANE

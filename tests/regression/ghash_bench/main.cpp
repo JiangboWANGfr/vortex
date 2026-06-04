@@ -100,17 +100,27 @@ int main(int argc, char** argv) {
             << ", total_blocks=" << total_blocks
             << ", total_bytes=" << data_bytes << std::endl;
 
-  // Build input data and software-reference expected tags.
+  // Build input data and software-reference expected tags. Tags are always
+  // computed from the logical (contiguous) stream; the device buffer is laid
+  // out per the selected layout so the kernel reads it back correctly.
   std::vector<uint8_t> data(data_bytes);
+  std::vector<uint8_t> expected(tag_bytes);
+  std::vector<uint8_t> stream(stream_bytes);
   for (uint32_t t = 0; t < num_tasks; ++t) {
     for (uint64_t off = 0; off < stream_bytes; ++off) {
-      data[t * stream_bytes + off] = gen_byte(t, (uint32_t)off);
+      stream[off] = gen_byte(t, (uint32_t)off);
     }
-  }
-  std::vector<uint8_t> expected(tag_bytes);
-  for (uint32_t t = 0; t < num_tasks; ++t) {
-    ghash_oneshot(kH, data.data() + t * stream_bytes, stream_bytes,
+    ghash_oneshot(kH, stream.data(), stream_bytes,
                   expected.data() + t * GHASH_BLOCK_BYTES);
+#ifdef GHASH_BENCH_INTERLEAVE
+    // block-major: block i of task t -> (i*num_tasks + t)*16
+    for (uint32_t i = 0; i < blocks_per_task; ++i) {
+      std::memcpy(data.data() + ((uint64_t)i * num_tasks + t) * GHASH_BLOCK_BYTES,
+                  stream.data() + (uint64_t)i * GHASH_BLOCK_BYTES, GHASH_BLOCK_BYTES);
+    }
+#else
+    std::memcpy(data.data() + (uint64_t)t * stream_bytes, stream.data(), stream_bytes);
+#endif
   }
 
   std::cout << "open device connection" << std::endl;
@@ -149,6 +159,8 @@ int main(int argc, char** argv) {
   std::cout << "download results" << std::endl;
   RT_CHECK(vx_copy_from_dev(&status, status_buffer, 0, sizeof(status)));
   RT_CHECK(vx_copy_from_dev(tags.data(), tag_buffer, 0, tag_bytes));
+
+  vx_dump_perf(device, stdout);
 
   cleanup();
 
