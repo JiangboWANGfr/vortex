@@ -9,16 +9,18 @@
 
 #include <stdint.h>
 
+// One known-answer test vector. Pointer fields (aad/pt/ct) may be NULL when
+// the corresponding length is 0 (e.g. empty message or no AAD).
 typedef struct {
-  const char* name;
-  uint8_t key[32];
-  uint8_t iv[12];
-  const uint8_t* aad;
-  uint32_t aad_len;
-  const uint8_t* pt;
-  uint32_t pt_len;
-  const uint8_t* ct;
-  uint8_t tag[16];
+  const char* name;     // human-readable label for diagnostics
+  uint8_t key[32];      // AES-256 key
+  uint8_t iv[12];       // 96-bit IV (GCM canonical length)
+  const uint8_t* aad;   // additional authenticated data (not encrypted)
+  uint32_t aad_len;     // AAD length in bytes
+  const uint8_t* pt;    // plaintext input
+  uint32_t pt_len;      // plaintext length in bytes
+  const uint8_t* ct;    // expected ciphertext (same length as pt)
+  uint8_t tag[16];      // expected 128-bit authentication tag
 } gcm_kat_t;
 
 // Shared real key / IV for TC15, TC16.
@@ -40,9 +42,12 @@ static const uint8_t KAT_AAD20[20] = {
   0xab,0xad,0xda,0xd2,
 };
 
+// Single all-zero plaintext block (TC14): key/IV are also all-zero.[one block]
 static const uint8_t KAT_PT_ONE[16] = {0};
 
-// Ciphertexts.
+// Expected ciphertexts, indexed by test case.
+// CT15 covers the full 64-byte plaintext; CT16 is the first 60 bytes
+// (TC16 truncates the message and adds AAD).
 static const uint8_t KAT_CT15[64] = {
   0x52,0x2d,0xc1,0xf0,0x99,0x56,0x7d,0x07,0xf4,0x7f,0x37,0xa3,0x2a,0x84,0x42,0x7d,
   0x64,0x3a,0x8c,0xdc,0xbf,0xe5,0xc0,0xc9,0x75,0x98,0xa2,0xbd,0x25,0x55,0xd1,0xaa,
@@ -62,15 +67,19 @@ static const uint8_t KAT_CT14[16] = {
 };
 
 static const gcm_kat_t kGcmKats[] = {
+  // TC13: zero key/IV, no AAD, no plaintext -> tag only (authenticates nothing).
   { "TC13_empty",
     {0}, {0}, NULL, 0, NULL, 0, NULL,
     {0x53,0x0f,0x8a,0xfb,0xc7,0x45,0x36,0xb9,0xa9,0x63,0xb4,0xf1,0xc4,0xcb,0x73,0x8b} },
+  // TC14: zero key/IV, single 16-byte zero block -> one full-block encrypt.
   { "TC14_oneblock",
     {0}, {0}, NULL, 0, KAT_PT_ONE, 16, KAT_CT14,
     {0xd0,0xd1,0xc8,0xa7,0x99,0x99,0x6b,0xf0,0x26,0x5b,0x98,0xb5,0xd4,0x8a,0xb9,0x19} },
+  // TC15: real key/IV, 64-byte plaintext (4 full blocks), no AAD.
   { "TC15_64B",
     KAT_K256, KAT_IV96, NULL, 0, KAT_PT64, 64, KAT_CT15,
     {0xb0,0x94,0xda,0xc5,0xd9,0x34,0x71,0xbd,0xec,0x1a,0x50,0x22,0x70,0xe3,0xcc,0x6c} },
+  // TC16: real key/IV, 20-byte AAD + 60-byte plaintext (partial trailing block).
   { "TC16_aad_partial",
     KAT_K256, KAT_IV96, KAT_AAD20, 20, KAT_PT64, 60, KAT_CT16,
     {0x76,0xfc,0x6e,0xce,0x0f,0x4e,0x17,0x68,0xcd,0xdf,0x88,0x53,0xbb,0x2d,0x55,0x1b} },

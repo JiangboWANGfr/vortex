@@ -109,7 +109,7 @@ module VX_mem_unit_top import VX_gpu_pkg::*; #(
     end
 
 `ifdef PERF_ENABLE
-    VX_cache_pkg::cache_perf_t lmem_perf = '0;
+    lmem_perf_t lmem_perf = '0;
 `endif
 
     VX_mem_unit #(
