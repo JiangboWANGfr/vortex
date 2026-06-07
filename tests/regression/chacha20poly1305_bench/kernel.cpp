@@ -53,16 +53,28 @@ void ccp_worker(const TaskArgs* __UNIFORM__ args) {
   uint8_t* tag = args->tags + (uint64_t)task * 16;
 
 #ifdef CHACHA20POLY1305_BENCH_UNPROTECTED
-  // Baseline: the AEAD data path with crypto removed -- a clean read+write copy
-  // (what a confidential all-reduce moves without authenticated encryption),
-  // plus a register-only rolling fold to keep the copy live. NOTE: deliberately
-  // NOT the indexed-stack fold gcm_bench uses; that fold costs more per byte than
-  // ChaCha-Poly's whole data path, which would make "overhead" come out < 1x.
+  // Baseline: move the buffer at WORD granularity (the unprotected version of
+  // the same data path), with one register fold per 64-bit word to keep the
+  // traffic live. Byte-granular folds are NOT a fair "no crypto" baseline:
+  // they execute more dynamic instructions per byte than the whole hardware
+  // AEAD path (measured 12.5 vs 9.7 instrs/B on the FPGA prototype), which
+  // pushes "overhead" below 1x. Keep this definition in sync with gcm_bench.
   uint64_t acc = 0;
-  for (uint32_t i = 0; i < args->bytes_per_task; ++i) {
-    uint8_t b = in[i];
-    out[i] = b;
-    acc = acc * 1000003u + b;   // register-only; forces per-byte touch
+  if (((((uintptr_t)in) | ((uintptr_t)out) | args->bytes_per_task) & 7) == 0) {
+    const uint64_t* in64 = (const uint64_t*)in;
+    uint64_t* out64 = (uint64_t*)out;
+    uint32_t words = args->bytes_per_task / 8;
+    for (uint32_t i = 0; i < words; ++i) {
+      uint64_t w = in64[i];
+      out64[i] = w;
+      acc = acc * 1000003u + w;
+    }
+  } else {  // unaligned fallback (not hit by the standard -n sizes)
+    for (uint32_t i = 0; i < args->bytes_per_task; ++i) {
+      uint8_t b = in[i];
+      out[i] = b;
+      acc = acc * 1000003u + b;
+    }
   }
   for (int i = 0; i < 16; ++i) tag[i] = (uint8_t)(acc >> ((i & 7) * 8));
 #else

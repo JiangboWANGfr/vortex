@@ -41,16 +41,30 @@ void gcm_worker(const TaskArgs* __UNIFORM__ args) {
   uint8_t* tag = args->tags + (uint64_t)task * 16;
 
 #ifdef GCM_BENCH_UNPROTECTED
-  // Baseline: move the buffer (read + write) and fold a checksum. Represents
-  // the all-reduce data movement without authenticated encryption.
-  uint8_t acc[16];
-  for (int i = 0; i < 16; ++i) acc[i] = 0;
-  for (uint32_t i = 0; i < args->bytes_per_task; ++i) {
-    uint8_t b = in[i];
-    out[i] = b;
-    acc[i & 15] ^= b;
+  // Baseline: move the buffer at WORD granularity (the unprotected version of
+  // the same data path), with one register fold per 64-bit word to keep the
+  // traffic live. The previous byte-granular indexed-stack fold executed more
+  // dynamic instructions per byte than the hardware AEAD path itself, which
+  // understates "overhead". Keep this definition in sync with
+  // chacha20poly1305_bench.
+  uint64_t acc = 0;
+  if (((((uintptr_t)in) | ((uintptr_t)out) | args->bytes_per_task) & 7) == 0) {
+    const uint64_t* in64 = (const uint64_t*)in;
+    uint64_t* out64 = (uint64_t*)out;
+    uint32_t words = args->bytes_per_task / 8;
+    for (uint32_t i = 0; i < words; ++i) {
+      uint64_t w = in64[i];
+      out64[i] = w;
+      acc = acc * 1000003u + w;
+    }
+  } else {  // unaligned fallback (not hit by the standard -n sizes)
+    for (uint32_t i = 0; i < args->bytes_per_task; ++i) {
+      uint8_t b = in[i];
+      out[i] = b;
+      acc = acc * 1000003u + b;
+    }
   }
-  for (int i = 0; i < 16; ++i) tag[i] = acc[i];
+  for (int i = 0; i < 16; ++i) tag[i] = (uint8_t)(acc >> ((i & 7) * 8));
 #else
   // Shared key, per-stream 96-bit IV derived from the task id.
   uint8_t iv[12];
