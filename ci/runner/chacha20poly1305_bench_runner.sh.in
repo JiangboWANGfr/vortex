@@ -131,7 +131,7 @@ run_overhead() {
                 [[ "$mode" == "UNPROTECTED" && -n "$cycles" ]] && unprot["$key"]="$cycles"
                 [[ "$mode" == "SOFTWARE"    && -n "$cycles" ]] && soft["$key"]="$cycles"
                 [[ "$mode" != "UNPROTECTED" ]] && cks["$key|$mode"]="$ck"
-                rows+=("$mode"$'\t'"$dispatch"$'\t'"$bytes"$'\t'"${tb:-}"$'\t'"$instrs"$'\t'"$cycles"$'\t'"$ipc"$'\t'"${ck:-}"$'\t'"$status"$'\t'"$key"$'\t'"$log")
+                rows+=("$mode"$'\x1f'"$dispatch"$'\x1f'"$bytes"$'\x1f'"${tb:-}"$'\x1f'"$instrs"$'\x1f'"$cycles"$'\x1f'"$ipc"$'\x1f'"${ck:-}"$'\x1f'"$status"$'\x1f'"$key"$'\x1f'"$log")
             done
         done
     done
@@ -139,7 +139,7 @@ run_overhead() {
     printf 'algo\taccel_mode\tdispatch\tdriver\tnum_tasks\tbytes_per_task\ttotal_bytes\tinstrs\tcycles\tcyc_per_byte\toverhead_x\tnative_speedup\tipc\tchecksum\tchecksum_ok\tstatus\tlog\n' > "$RESULTS"
     local row
     for row in "${rows[@]}"; do
-        IFS=$'\t' read -r mode dispatch bytes tb instrs cycles ipc ck status key log <<< "$row"
+        IFS=$'\x1f' read -r mode dispatch bytes tb instrs cycles ipc ck status key log <<< "$row"  # \x1f: tabs are IFS whitespace and collapse empty fields (FAIL rows), shifting columns
         local cpb="" ovh="" nsp="" ckok=""
         [[ -n "$cycles" && -n "$tb" ]] && cpb=$(ratio_f "$cycles" "$tb")
         [[ -n "$cycles" && -n "${unprot[$key]:-}" ]] && ovh=$(ratio_x "$cycles" "${unprot[$key]}")
@@ -179,14 +179,14 @@ run_radix() {
                     "OPTS=-t $TASKS -n 64" >"$log" 2>&1; then status="PASS"; else status="FAIL"; failures=$((failures+1)); fi
             local perf instrs cycles ipc
             perf=$(extract_perf "$log"); IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
-            rows+=("$dispatch"$'\t'"$radix"$'\t'"$((80/radix))"$'\t'"$instrs"$'\t'"$cycles"$'\t'"$ipc"$'\t'"$status"$'\t'"$log")
+            rows+=("$dispatch"$'\x1f'"$radix"$'\x1f'"$((80/radix))"$'\x1f'"$instrs"$'\x1f'"$cycles"$'\x1f'"$ipc"$'\x1f'"$status"$'\x1f'"$log")
         done
     done
 
     printf 'algo\taccel_mode\tdispatch\tqr_radix\tqr_cycles\tdriver\tnum_tasks\titers\tinstrs\tcycles\tipc\tstatus\tlog\n' > "$RESULTS"
     local row
     for row in "${rows[@]}"; do
-        IFS=$'\t' read -r dispatch radix qrc instrs cycles ipc status log <<< "$row"
+        IFS=$'\x1f' read -r dispatch radix qrc instrs cycles ipc status log <<< "$row"
         printf 'chacha20\tNATIVE\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$dispatch" "$radix" "$qrc" "$DRIVER" "$TASKS" "$ITERS" "$instrs" "$cycles" "$ipc" "$status" "$log" >> "$RESULTS"
     done
