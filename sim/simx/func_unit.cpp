@@ -185,7 +185,13 @@ void AluUnit::tick() {
 					break;
 				case ChaChaType::BLOCK:
 					// time-multiplexed quarter-round permute: 80/RADIX cycles + accept/resp
-#ifdef CHACHA_QR_RADIX
+					// (CHACHA_QR_HALF: half a QR per cycle, 160 cycles;
+					//  CHACHA_QR_QUARTER: one add-xor-rot stage per cycle, 320 cycles)
+#if defined(CHACHA_QR_QUARTER)
+					delay = 320 + 2;
+#elif defined(CHACHA_QR_HALF)
+					delay = 160 + 2;
+#elif defined(CHACHA_QR_RADIX)
 					delay = (80 / CHACHA_QR_RADIX) + 2;
 #else
 					delay = 82;

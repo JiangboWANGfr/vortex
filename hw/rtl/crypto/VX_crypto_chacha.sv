@@ -14,6 +14,13 @@
 // cycles. RADIX=1 is the area-minimal serial baseline (80 cycles); RADIX=80 is a
 // fully combinational block (1 cycle, long path). Because it is the same QR
 // schedule unrolled in order, every radix is bit-identical to chacha20.h.
+// CHACHA_QR_HALF instead steps HALF a quarter-round per cycle (stages 1-2,
+// then 3-4), so BLOCK takes 160 cycles but the single-cycle state-update loop
+// chains 2 adders instead of 4 (FPGA Fmax: a full QR is 4 serially dependent
+// 32-bit carry adds and misses 250 MHz on Stratix 10). CHACHA_QR_QUARTER goes
+// one further: ONE add-xor-rot stage per cycle (BLOCK = 320 cycles, 1 adder
+// per cycle in the loop). Same ops in the same order, so both are
+// bit-identical as well.
 //
 // Words are 32-bit (decoupled from XLEN); byte<->word order and the block
 // counter stay in the software wrapper, so the PE only ever sees 32-bit words.
@@ -47,7 +54,15 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
     localparam QR_RADIX = 1;
 `endif
     `STATIC_ASSERT ((80 % QR_RADIX) == 0, ("CHACHA_QR_RADIX must divide 80"))
+`ifdef CHACHA_QR_QUARTER
+    `STATIC_ASSERT (QR_RADIX == 1, ("CHACHA_QR_QUARTER requires CHACHA_QR_RADIX=1"))
+    localparam PERM_STEPS = 320;
+`elsif CHACHA_QR_HALF
+    `STATIC_ASSERT (QR_RADIX == 1, ("CHACHA_QR_HALF requires CHACHA_QR_RADIX=1"))
+    localparam PERM_STEPS = 160;
+`else
     localparam PERM_STEPS = 80 / QR_RADIX;
+`endif
 
     localparam WSEL_BITS = 4;   // 16 words, addressed in 32-bit units (not XLEN)
 
@@ -68,7 +83,7 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
     reg [1:0]                       state_r;
     reg [NUM_LANES-1:0][15:0][31:0] x_r;       // working buffer (C x[])
     reg [NUM_LANES-1:0][15:0][31:0] st_r;      // feedforward snapshot (C st[])
-    reg [6:0]                       perm_ctr_r; // 0..PERM_STEPS-1
+    reg [8:0]                       perm_ctr_r; // 0..PERM_STEPS-1
     reg [NW_WIDTH-1:0]              wid_r;
     reg [NUM_LANES-1:0]             tmask_r;
     reg [META_DATAW-1:0]            meta_r;
@@ -144,6 +159,55 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
         end
     endfunction
 
+`ifdef CHACHA_QR_HALF
+    // half a quarter-round (stages 1-2 if ctr even, 3-4 if odd) for one lane
+    function automatic [511:0] perm_half(input [511:0] xin, input [8:0] ctr);
+        reg [15:0][31:0] xw;
+        reg [15:0]       idx;
+        reg [3:0]        ia, ib, ic, id;
+        reg [31:0]       a, b, c, d;
+        begin
+            xw = xin;
+            idx = qr_indices(3'(ctr >> 1));  // QR schedule index = (ctr/2) mod 8
+            ia = idx[15:12]; ib = idx[11:8]; ic = idx[7:4]; id = idx[3:0];
+            a = xw[ia]; b = xw[ib]; c = xw[ic]; d = xw[id];
+            if (!ctr[0]) begin
+                a = a + b; d = d ^ a; d = rotl32(d, 16);
+                c = c + d; b = b ^ c; b = rotl32(b, 12);
+            end else begin
+                a = a + b; d = d ^ a; d = rotl32(d, 8);
+                c = c + d; b = b ^ c; b = rotl32(b, 7);
+            end
+            xw[ia] = a; xw[ib] = b; xw[ic] = c; xw[id] = d;
+            perm_half = xw;
+        end
+    endfunction
+`endif
+
+`ifdef CHACHA_QR_QUARTER
+    // one add-xor-rot stage (stage = ctr mod 4) of a quarter-round per cycle
+    function automatic [511:0] perm_quarter(input [511:0] xin, input [8:0] ctr);
+        reg [15:0][31:0] xw;
+        reg [15:0]       idx;
+        reg [3:0]        ia, ib, ic, id;
+        reg [31:0]       a, b, c, d;
+        begin
+            xw = xin;
+            idx = qr_indices(3'(ctr >> 2));  // QR schedule index = (ctr/4) mod 8
+            ia = idx[15:12]; ib = idx[11:8]; ic = idx[7:4]; id = idx[3:0];
+            a = xw[ia]; b = xw[ib]; c = xw[ic]; d = xw[id];
+            case (ctr[1:0])
+                2'd0: begin a = a + b; d = d ^ a; d = rotl32(d, 16); end
+                2'd1: begin c = c + d; b = b ^ c; b = rotl32(b, 12); end
+                2'd2: begin a = a + b; d = d ^ a; d = rotl32(d, 8);  end
+                2'd3: begin c = c + d; b = b ^ c; b = rotl32(b, 7);  end
+            endcase
+            xw[ia] = a; xw[ib] = b; xw[ic] = c; xw[id] = d;
+            perm_quarter = xw;
+        end
+    endfunction
+`endif
+
     wire execute_fire = (state_r == ST_IDLE) && execute_if.valid;
     wire do_write = (execute_if.data.op_type == INST_CRYPTO_CHACHA_WR);
     wire do_block = (execute_if.data.op_type == INST_CRYPTO_CHACHA_BLOCK);
@@ -195,11 +259,17 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
                 end
                 ST_PERMUTE: begin
                     for (l = 0; l < NUM_LANES; ++l)
+`ifdef CHACHA_QR_QUARTER
+                        x_r[l] <= perm_quarter(x_r[l], perm_ctr_r);
+`elsif CHACHA_QR_HALF
+                        x_r[l] <= perm_half(x_r[l], perm_ctr_r);
+`else
                         x_r[l] <= perm_chain(x_r[l], 7'(perm_ctr_r * 7'(QR_RADIX)));
-                    if (perm_ctr_r == 7'(PERM_STEPS - 1))
+`endif
+                    if (perm_ctr_r == 9'(PERM_STEPS - 1))
                         state_r <= ST_FEEDFWD;
                     else
-                        perm_ctr_r <= perm_ctr_r + 7'd1;
+                        perm_ctr_r <= perm_ctr_r + 9'd1;
                 end
                 ST_FEEDFWD: begin
                     for (l = 0; l < NUM_LANES; ++l)
