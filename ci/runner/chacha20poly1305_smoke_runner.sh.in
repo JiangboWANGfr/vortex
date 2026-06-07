@@ -1,0 +1,231 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+if [[ -f "$SCRIPT_DIR/runner_common.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh"
+else
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/runner_common.sh.in"
+fi
+
+show_usage() {
+    cat <<EOF
+Vortex ChaCha20-Poly1305 Smoke Runner
+
+Runs tests/regression/chacha20poly1305_smoke across a (chacha mode x poly
+mode) x driver matrix and emits a TSV with instrs/cycles/IPC. Every cell
+checks the same RFC 8439 KATs (2.3.2 ChaCha block, 2.5.2 Poly1305 MAC,
+2.8.2 AEAD ct+tag), so SOFTWARE and NATIVE rows are a direct bit-exactness
+cross-check of the hardware PEs against the software reference.
+
+Combos (CHACHA20_ACCEL_MODE:POLY1305_ACCEL_MODE):
+  SOFTWARE:SOFTWARE : pure software reference (no PE used)
+  NATIVE:SOFTWARE   : ChaCha20 PE only
+  SOFTWARE:NATIVE   : Poly1305 PE only
+  NATIVE:NATIVE     : full AEAD on both PEs
+
+The driver runtime is built ONCE per driver with the union of -DEXT_*_ENABLE
+defines needed by the selected combos (an instantiated-but-unused PE does not
+affect SOFTWARE-mode correctness, and re-verilating rtlsim per combo is slow).
+On de10pro the PEs live in the bitstream; make sure it was synthesized with
+the matching EXT_*_ENABLE macros.
+
+Usage:
+  $0 [options]
+
+Options:
+  --drivers=<list>       Comma-separated backends (default: simx)
+                         Supported: simx, rtlsim, de10pro
+  --combos=<list>        Comma-separated chacha:poly mode pairs (default:
+                         SOFTWARE:SOFTWARE,NATIVE:SOFTWARE,SOFTWARE:NATIVE,NATIVE:NATIVE)
+  --chacha-qr=<v>        ChaCha QR stepping for the simulated PE: half,
+                         quarter, or a radix N dividing 80 (default: radix 1).
+                         quarter matches the DE10-Pro synthesis design point.
+  --output-root=<path>   Output root (default: <build>/runner_output)
+  --results=<path>       Aggregate TSV (default:
+                         <output-root>/chacha20poly1305_smoke/results/all/results.tsv)
+  --log-dir=<path>       Per-run logs (default:
+                         <output-root>/chacha20poly1305_smoke/logs)
+  --startup-addr=<hex>   Kernel startup address (default: XLEN-specific)
+  --ext-f-disable        Build kernel with EXT_F_DISABLE=1
+  --ext-d-disable        Build kernel with EXT_D_DISABLE=1
+  --fd-disable           Shorthand for both ext-f-disable and ext-d-disable
+  --debug=<level>        Debug level passed to simulators (default: 0)
+  --help                 Show this help
+
+The prebuilt libvortex.a is typically soft-float (rv64ima); pass --fd-disable
+to match it when (re)building the kernel runtime.
+
+Examples:
+  $0 --drivers=simx --fd-disable
+  $0 --drivers=rtlsim --chacha-qr=quarter --fd-disable
+  $0 --drivers=de10pro --combos=NATIVE:NATIVE --fd-disable
+EOF
+}
+
+validate_combo() {
+    case "$1" in
+        SOFTWARE:SOFTWARE|NATIVE:SOFTWARE|SOFTWARE:NATIVE|NATIVE:NATIVE) ;;
+        *) die "unsupported combo: $1; supported: {SOFTWARE,NATIVE}:{SOFTWARE,NATIVE}" ;;
+    esac
+}
+
+chacha_qr_define() {
+    case "$1" in
+        "")      echo "" ;;
+        half)    echo "-DCHACHA_QR_HALF" ;;
+        quarter) echo "-DCHACHA_QR_QUARTER" ;;
+        1)       echo "" ;;
+        2|4|5|8|10|16|20|40|80) echo "-DCHACHA_QR_RADIX=$1" ;;
+        *) die "unsupported --chacha-qr=$1; use half, quarter, or a radix dividing 80" ;;
+    esac
+}
+
+# Pull the aggregate "PERF: instrs=N, cycles=N, IPC=N" line from a run log.
+extract_perf() {
+    local file="$1"
+    local line
+    line=$(grep -a '^PERF: instrs=' "$file" | tail -n 1 || true)
+    if [[ -z "$line" ]]; then
+        printf '\t\t'
+        return
+    fi
+    printf '%s' "$line" \
+        | sed -E 's/.*instrs=([0-9,]+), cycles=([0-9,]+), IPC=([0-9.]+).*/\1\t\2\t\3/' \
+        | tr -d ','
+}
+
+main() {
+    RUNNER_NAME="chacha20poly1305_smoke"
+    DRIVER_LIST="simx"
+    COMBO_LIST="SOFTWARE:SOFTWARE,NATIVE:SOFTWARE,SOFTWARE:NATIVE,NATIVE:NATIVE"
+    CHACHA_QR=""
+    STARTUP_ADDR=""
+    EXT_F_DISABLE=0
+    EXT_D_DISABLE=0
+    DEBUG_LEVEL=0
+    OUTPUT_ROOT="$ROOT_DIR/runner_output"
+    RESULTS=""
+    LOG_DIR=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --drivers=*)      DRIVER_LIST="${1#*=}" ;;
+            --combos=*)       COMBO_LIST="${1#*=}" ;;
+            --chacha-qr=*)    CHACHA_QR="${1#*=}" ;;
+            --output-root=*)  OUTPUT_ROOT="${1#*=}" ;;
+            --results=*)      RESULTS="${1#*=}" ;;
+            --log-dir=*)      LOG_DIR="${1#*=}" ;;
+            --startup-addr=*) STARTUP_ADDR="${1#*=}" ;;
+            --ext-f-disable)  EXT_F_DISABLE=1 ;;
+            --ext-d-disable)  EXT_D_DISABLE=1 ;;
+            --fd-disable)     EXT_F_DISABLE=1; EXT_D_DISABLE=1 ;;
+            --debug=*)        DEBUG_LEVEL="${1#*=}" ;;
+            --help|-h)        show_usage; exit 0 ;;
+            *)                die "unknown option: $1" ;;
+        esac
+        shift
+    done
+
+    IFS=',' read -r -a DRIVERS <<< "$DRIVER_LIST"
+    IFS=',' read -r -a COMBOS  <<< "$COMBO_LIST"
+
+    local driver combo
+    for driver in "${DRIVERS[@]}"; do validate_driver "$driver"; done
+    for combo in "${COMBOS[@]}";   do validate_combo "$combo";   done
+
+    local qr_define
+    qr_define=$(chacha_qr_define "$CHACHA_QR")
+
+    # Union of PE defines needed by the selected combos.
+    local need_chacha=0 need_poly=0
+    for combo in "${COMBOS[@]}"; do
+        [[ "${combo%%:*}" == "NATIVE" ]] && need_chacha=1
+        [[ "${combo##*:}" == "NATIVE" ]] && need_poly=1
+    done
+    local cfg=""
+    [[ "$need_chacha" -eq 1 ]] && cfg="-DEXT_CHACHA_ENABLE"
+    [[ "$need_chacha" -eq 1 && -n "$qr_define" ]] && cfg="$cfg $qr_define"
+    [[ "$need_poly" -eq 1 ]] && cfg="$cfg -DEXT_POLY1305_ENABLE"
+
+    load_xlen
+    set_default_startup_addr
+    source_toolchain_env
+    init_multi_driver_output
+    local run_output_dir="$OUTPUT_ROOT/$RUNNER_NAME"
+    local app_dir="$ROOT_DIR/tests/regression/chacha20poly1305_smoke"
+
+    echo "ROOT_DIR=$ROOT_DIR"
+    echo "OUTPUT_ROOT=$OUTPUT_ROOT"
+    echo "XLEN=$XLEN"
+    echo "DRIVERS=${DRIVERS[*]}"
+    echo "COMBOS=${COMBOS[*]}"
+    echo "CHACHA_QR=${CHACHA_QR:-radix1}"
+    echo "DRIVER_CONFIGS=${cfg:-<none>}"
+    echo "RESULTS=$RESULTS"
+
+    run_cmd make -C "$ROOT_DIR/hw" config
+    build_kernel
+
+    local -a driver_cfg=()
+    [[ -n "$cfg" ]] && driver_cfg+=("CONFIGS=$cfg")
+    for driver in "${DRIVERS[@]}"; do
+        build_driver_runtime_common "$driver" 5000 "${driver_cfg[@]}"
+    done
+
+    local header='algo\tchacha_mode\tpoly_mode\tdriver\tstatus\tinstrs\tcycles\tIPC\tlog\n'
+    printf "$header" > "$RESULTS"
+    for driver in "${DRIVERS[@]}"; do
+        mkdir -p "$LOG_DIR/$driver" "$run_output_dir/results/$driver"
+        printf "$header" > "$run_output_dir/results/$driver/results.tsv"
+    done
+
+    local failures=0
+    for combo in "${COMBOS[@]}"; do
+        local cc_mode="${combo%%:*}" poly_mode="${combo##*:}"
+
+        local build_args=("make" "-C" "$app_dir" "clean" "all"
+                          "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR"
+                          "CHACHA20_ACCEL_MODE=$cc_mode"
+                          "POLY1305_ACCEL_MODE=$poly_mode")
+        while IFS= read -r flag; do
+            [[ -n "$flag" ]] && build_args+=("$flag")
+        done < <(join_flags)
+        run_cmd "${build_args[@]}"
+
+        for driver in "${DRIVERS[@]}"; do
+            local log_file="$LOG_DIR/$driver/ccp-smoke-${cc_mode}-${poly_mode}-${driver}.log"
+            local status
+            echo
+            echo "== Running chacha20poly1305_smoke chacha=$cc_mode poly=$poly_mode on $driver =="
+            if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$driver" >"$log_file" 2>&1; then
+                status="PASS"
+            else
+                status="FAIL"
+                failures=$((failures + 1))
+            fi
+
+            local perf instrs cycles ipc
+            perf=$(extract_perf "$log_file")
+            IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
+
+            local row
+            row=$(printf 'chacha20poly1305\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+                "$cc_mode" "$poly_mode" "$driver" "$status" \
+                "$instrs" "$cycles" "$ipc" "$log_file")
+            printf '%s\n' "$row" >> "$RESULTS"
+            printf '%s\n' "$row" >> "$run_output_dir/results/$driver/results.tsv"
+        done
+    done
+
+    if [[ $failures -ne 0 ]]; then
+        die "$failures chacha20poly1305 smoke run(s) failed; partial results in $RESULTS"
+    fi
+
+    echo "ChaCha20-Poly1305 smoke results written to $RESULTS"
+}
+
+main "$@"
