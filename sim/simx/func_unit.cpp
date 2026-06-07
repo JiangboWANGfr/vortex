@@ -169,8 +169,9 @@ void AluUnit::tick() {
 					delay = 2;
 					break;
 				case PolyType::BLOCK:
-					// sequential 5x5 schoolbook (25 products) + carry/fold + accept/resp
-					delay = 25 + 2;
+					// pipelined 5x5 schoolbook (25 products + 3 drain) + per-limb
+					// carry/fold (6) + ha load + accept/resp
+					delay = 35 + 2;
 					break;
 				default:
 					std::abort();

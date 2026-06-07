@@ -13,6 +13,13 @@
 // 5x5 = 25 schoolbook partial products (one product/cycle); latency is hidden by
 // SIMT warp interleaving (cf. the GHASH radix study).
 //
+// FPGA Fmax: the multiply-accumulate is pipelined (operand-select register ->
+// registered multiplier -> accumulate), so the only single-cycle feedback is
+// the 64-bit accumulate; the donna per-block carry/fold runs one carry step
+// per cycle instead of chaining six wide adds combinationally (the unpipelined
+// version closed at 163 MHz on Stratix 10, cf. the ChaCha sub-QR stepping).
+// Same operations in the same order, so results stay bit-identical.
+//
 // Ops (clamp / final-reduce / +s done in the software wrapper):
 //   POLY_SETR  : r = {rs2,rs1} (clamped); acc = 0
 //   POLY_BLOCK : acc = (acc + {rs2,rs1} + 2^128) * r mod P   [multi-cycle]
@@ -62,6 +69,14 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
     reg [2:0]                       j_ctr;     // partial-product j (0..4)
     reg [NUM_LANES-1:0][4:0][27:0]  ha;        // acc+block, 28-bit limbs
     reg [NUM_LANES-1:0][4:0][63:0]  dacc;      // schoolbook accumulators
+    // multiply pipeline: P0 operand-select regs, P1 product reg (DSP I/O regs)
+    reg [NUM_LANES-1:0][27:0]       mul_a_r;   // P0: selected ha limb
+    reg [NUM_LANES-1:0][28:0]       mul_b_r;   // P0: selected r/5r coefficient
+    reg [NUM_LANES-1:0][56:0]       prod_r;    // P1: registered product
+    reg [2:0]                       j_p1, j_p2; // accumulate target, pipelined
+    reg                             v_p1, v_p2; // pipeline stage valids
+    reg                             mul_done;   // all 25 products issued
+    reg [2:0]                       carry_step; // ST_CARRY sub-step (0..5)
     reg [NW_WIDTH-1:0]              wid_r;
     reg [NUM_LANES-1:0]             tmask_r;
     reg [META_DATAW-1:0]            meta_r;
@@ -99,15 +114,15 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
 
     // Per-lane one-product-per-cycle schoolbook:
     //   dacc[j] += ha[i] * coeff,  coeff = (i<=j) ? r[j-i] : 5*r[j-i+5]
+    // P0 selects the operands, P1 multiplies between registers, P2 accumulates;
+    // only the accumulate is a feedback loop.
     wire       use_r    = (i_ctr <= j_ctr);
     wire [2:0] coff_idx = use_r ? (j_ctr - i_ctr) : (j_ctr - i_ctr + 3'd5);
 
-    wire [NUM_LANES-1:0][63:0] dacc_next;
+    wire [NUM_LANES-1:0][28:0] coeff_w;
     for (genvar l = 0; l < NUM_LANES; ++l) begin : g_pp
-        wire [28:0] coeff = use_r ? {3'b0, state_mem[widx].r[l][coff_idx]}
+        assign coeff_w[l] = use_r ? {3'b0, state_mem[widx].r[l][coff_idx]}
                                   : state_mem[widx].s[l][coff_idx];
-        wire [56:0] prod  = {29'b0, ha[l][i_ctr]} * coeff;
-        assign dacc_next[l] = dacc[l][j_ctr] + {7'b0, prod};
     end
 
     integer w, l;
@@ -118,6 +133,15 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
             j_ctr          <= '0;
             ha             <= '0;
             dacc           <= '0;
+            mul_a_r        <= '0;
+            mul_b_r        <= '0;
+            prod_r         <= '0;
+            j_p1           <= '0;
+            j_p2           <= '0;
+            v_p1           <= 0;
+            v_p2           <= 0;
+            mul_done       <= 0;
+            carry_step     <= '0;
             wid_r          <= '0;
             tmask_r        <= '0;
             meta_r         <= '0;
@@ -170,6 +194,10 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                             end
                             i_ctr <= '0;
                             j_ctr <= '0;
+                            v_p1 <= 0;
+                            v_p2 <= 0;
+                            mul_done <= 0;
+                            carry_step <= '0;
                             state_r <= ST_MUL;
                         end else if (do_read) begin
                             for (l = 0; l < NUM_LANES; ++l)
@@ -181,44 +209,64 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                     end
                 end
                 ST_MUL: begin
-                    for (l = 0; l < NUM_LANES; ++l)
-                        dacc[l][j_ctr] <= dacc_next[l];
-                    if (i_ctr == 3'd4) begin
-                        i_ctr <= '0;
-                        if (j_ctr == 3'd4)
-                            state_r <= ST_CARRY;
-                        else
-                            j_ctr <= j_ctr + 3'd1;
-                    end else begin
-                        i_ctr <= i_ctr + 3'd1;
-                    end
-                end
-                ST_CARRY: begin
-                    // donna-32 per-block carry + 2^130-5 fold (combinational chain)
-                    for (l = 0; l < NUM_LANES; ++l) begin
-                        if (tmask_r[l]) begin
-                            logic [63:0] e0, e1, e2, e3, e4;
-                            logic [63:0] c;
-                            logic [63:0] a0;
-                            logic [26:0] a1;
-                            e0 = dacc[l][0]; e1 = dacc[l][1]; e2 = dacc[l][2];
-                            e3 = dacc[l][3]; e4 = dacc[l][4];
-                            c = e0 >> 26; e1 = e1 + c;
-                            c = e1 >> 26; e2 = e2 + c;
-                            c = e2 >> 26; e3 = e3 + c;
-                            c = e3 >> 26; e4 = e4 + c;
-                            c = e4 >> 26;
-                            a0 = (e0 & 64'h3ffffff) + c * 5;
-                            c = a0 >> 26;
-                            a1 = 27'((e1 & 64'h3ffffff) + c);
-                            state_mem[widx].acc[l][0] <= {1'b0, a0[25:0]};   // h0 masked
-                            state_mem[widx].acc[l][1] <= a1;                 // h1 may be 27-bit
-                            state_mem[widx].acc[l][2] <= {1'b0, e2[25:0]};
-                            state_mem[widx].acc[l][3] <= {1'b0, e3[25:0]};
-                            state_mem[widx].acc[l][4] <= {1'b0, e4[25:0]};
+                    // P0: select operands into registers while issues remain
+                    if (!mul_done) begin
+                        for (l = 0; l < NUM_LANES; ++l) begin
+                            mul_a_r[l] <= ha[l][i_ctr];
+                            mul_b_r[l] <= coeff_w[l];
+                        end
+                        if (i_ctr == 3'd4) begin
+                            i_ctr <= '0;
+                            if (j_ctr == 3'd4)
+                                mul_done <= 1;
+                            else
+                                j_ctr <= j_ctr + 3'd1;
+                        end else begin
+                            i_ctr <= i_ctr + 3'd1;
                         end
                     end
-                    state_r <= ST_RESP;
+                    v_p1 <= ~mul_done;
+                    j_p1 <= j_ctr;
+                    // P1: multiply between registers (DSP input/output regs)
+                    for (l = 0; l < NUM_LANES; ++l)
+                        prod_r[l] <= {29'b0, mul_a_r[l]} * {28'b0, mul_b_r[l]};
+                    v_p2 <= v_p1;
+                    j_p2 <= j_p1;
+                    // P2: accumulate -- the only single-cycle feedback path
+                    if (v_p2) begin
+                        for (l = 0; l < NUM_LANES; ++l)
+                            dacc[l][j_p2] <= dacc[l][j_p2] + {7'b0, prod_r[l]};
+                    end
+                    if (mul_done && ~v_p1 && ~v_p2)
+                        state_r <= ST_CARRY;
+                end
+                ST_CARRY: begin
+                    // donna-32 per-block carry + 2^130-5 fold, ONE carry step per
+                    // cycle (same e/c sequence as the former combinational chain,
+                    // so results are bit-identical; dacc holds e0..e4 in place)
+                    for (l = 0; l < NUM_LANES; ++l) begin
+                        case (carry_step)
+                            3'd0: dacc[l][1] <= dacc[l][1] + (dacc[l][0] >> 26);
+                            3'd1: dacc[l][2] <= dacc[l][2] + (dacc[l][1] >> 26);
+                            3'd2: dacc[l][3] <= dacc[l][3] + (dacc[l][2] >> 26);
+                            3'd3: dacc[l][4] <= dacc[l][4] + (dacc[l][3] >> 26);
+                            3'd4: // a0 = (e0 & M) + c*5 (dacc[0] still holds e0)
+                                dacc[l][0] <= (dacc[l][0] & 64'h3ffffff) + (dacc[l][4] >> 26) * 5;
+                            default: begin // masked write-back; h1 keeps its carry bit
+                                if (tmask_r[l]) begin
+                                    state_mem[widx].acc[l][0] <= {1'b0, dacc[l][0][25:0]};   // h0 masked
+                                    state_mem[widx].acc[l][1] <= 27'((dacc[l][1] & 64'h3ffffff) + (dacc[l][0] >> 26));
+                                    state_mem[widx].acc[l][2] <= {1'b0, dacc[l][2][25:0]};
+                                    state_mem[widx].acc[l][3] <= {1'b0, dacc[l][3][25:0]};
+                                    state_mem[widx].acc[l][4] <= {1'b0, dacc[l][4][25:0]};
+                                end
+                            end
+                        endcase
+                    end
+                    if (carry_step == 3'd5)
+                        state_r <= ST_RESP;
+                    else
+                        carry_step <= carry_step + 3'd1;
                 end
                 ST_RESP: begin
                     if (result_if.ready)
