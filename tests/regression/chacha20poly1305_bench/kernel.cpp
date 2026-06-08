@@ -101,7 +101,10 @@ void ccp_worker(const TaskArgs* __UNIFORM__ args) {
   for (int i = 0; i < 16; ++i) tag[i] = acc[i];
   if (args->bytes_per_task) out[0] = acc[0];  // keep `out` live
 #else
-  chacha20poly1305_encrypt(args->key, nonce, nullptr, 0, in, args->bytes_per_task, out, tag);
+  // Streaming AEAD: Poly1305 absorbs the ciphertext from DRAM incrementally,
+  // so bytes_per_task is not capped by CHACHA_AEAD_MAX_PT / the 8KB thread
+  // stack (the buffered chacha20poly1305_encrypt overflows past 1KiB).
+  chacha20poly1305_encrypt_stream(args->key, nonce, nullptr, 0, in, args->bytes_per_task, out, tag);
 #endif
 #endif
 }

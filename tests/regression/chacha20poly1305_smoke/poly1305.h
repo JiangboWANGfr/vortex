@@ -273,6 +273,45 @@ static inline void poly1305_mac(uint8_t mac[16], const uint8_t* m, size_t len,
   poly1305_finalize(mac, h, key);   // 冻结 + 加 s -> tag
 }
 
+// ---- 流式 (增量) Poly1305: 用于不想把整段消息缓存进定长数组的场景 ----
+// 调用顺序: poly1305_stream_init -> poly1305_stream_block16 (每满 16 字节块一次)
+// -> poly1305_stream_finalize。每个喂进 block16 的块都按"满块"处理 (+2^128),
+// 所以调用方必须自己把残块补零到 16 字节 (AEAD framing 正是这么做的)。
+typedef struct {
+  uint32_t r[5], r5[5], h[5];
+} poly1305_stream_t;
+
+static inline void poly1305_stream_init(poly1305_stream_t* st, const uint8_t key[32]) {
+  poly1305_keysetup(st->r, st->r5, key);
+  for (int k = 0; k < 5; ++k) st->h[k] = 0;
+#ifdef POLY1305_NATIVE
+  uint32_t t0 = poly_le32(key + 0), t1 = poly_le32(key + 4);
+  uint32_t t2 = poly_le32(key + 8), t3 = poly_le32(key + 12);
+  uint64_t r_lo = (uint64_t)(t0 & 0x0fffffff) | ((uint64_t)(t1 & 0x0ffffffc) << 32);
+  uint64_t r_hi = (uint64_t)(t2 & 0x0ffffffc) | ((uint64_t)(t3 & 0x0ffffffc) << 32);
+  __intrin_poly1305_setr(r_lo, r_hi);
+#endif
+}
+
+// 吸收一个满 16 字节块 (NATIVE: PE BLOCK; SOFTWARE: 霍纳链一步)。
+static inline void poly1305_stream_block16(poly1305_stream_t* st, const uint8_t blk[16]) {
+#ifdef POLY1305_NATIVE
+  uint64_t blo = (uint64_t)poly_le32(blk)     | ((uint64_t)poly_le32(blk + 4)  << 32);
+  uint64_t bhi = (uint64_t)poly_le32(blk + 8) | ((uint64_t)poly_le32(blk + 12) << 32);
+  __intrin_poly1305_block(blo, bhi);
+#else
+  poly1305_blocks(st->h, st->r, st->r5, blk, 16);
+#endif
+}
+
+static inline void poly1305_stream_finalize(poly1305_stream_t* st, uint8_t mac[16],
+                                            const uint8_t key[32]) {
+#ifdef POLY1305_NATIVE
+  for (int k = 0; k < 5; ++k) st->h[k] = (uint32_t)__intrin_poly1305_rd((uint32_t)k);
+#endif
+  poly1305_finalize(mac, st->h, key);
+}
+
 #ifdef __cplusplus
 }
 #endif

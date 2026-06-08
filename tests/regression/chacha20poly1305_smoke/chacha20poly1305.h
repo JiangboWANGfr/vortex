@@ -92,6 +92,50 @@ static inline void chacha20poly1305_encrypt(const uint8_t key[32],
   poly1305_mac(tag, mac_data, n, block0);
 }
 
+// 流式 AEAD 加密: 与上面 chacha20poly1305_encrypt 逐位等价, 但不把整段密文缓存进
+// 一个 pt_len 大小的本地数组 —— Poly1305 直接增量吸收 ct 内存里的满块, 只为 AAD/密文
+// 的残块和末尾长度块用 O(1) 的 16 字节临时缓冲。因此 pt_len 不再受 CHACHA_AEAD_MAX_PT
+// (以及每线程 8KB 栈) 限制, 适合 benchmark 的大消息。MAC 数据布局不变:
+//   AAD || pad16 || C || pad16 || le64(aad_len) || le64(ct_len)
+static inline void chacha20poly1305_encrypt_stream(const uint8_t key[32],
+                                                   const uint8_t nonce[12],
+                                                   const uint8_t* aad, size_t aad_len,
+                                                   const uint8_t* pt, size_t pt_len,
+                                                   uint8_t* ct, uint8_t tag[16]) {
+  uint8_t block0[64];
+  chacha20_block(key, 0, nonce, block0);          // Poly1305 一次性密钥
+  chacha20_xor(key, 1, nonce, pt, pt_len, ct);    // 加密 (块计数从 1 开始)
+
+  poly1305_stream_t st;
+  poly1305_stream_init(&st, block0);
+
+  uint8_t blk[16];
+  // AAD: 满块直接喂, 残块补零成一个满块。
+  size_t aad_full = aad_len & ~(size_t)15;
+  for (size_t off = 0; off < aad_full; off += 16)
+    poly1305_stream_block16(&st, aad + off);
+  if (aad_len & 15) {
+    for (int i = 0; i < 16; ++i) blk[i] = 0;
+    for (size_t i = aad_full; i < aad_len; ++i) blk[i - aad_full] = aad[i];
+    poly1305_stream_block16(&st, blk);
+  }
+  // 密文 C: 满块直接从 ct 内存喂 (零拷贝), 残块补零成一个满块。
+  size_t ct_full = pt_len & ~(size_t)15;
+  for (size_t off = 0; off < ct_full; off += 16)
+    poly1305_stream_block16(&st, ct + off);
+  if (pt_len & 15) {
+    for (int i = 0; i < 16; ++i) blk[i] = 0;
+    for (size_t i = ct_full; i < pt_len; ++i) blk[i - ct_full] = ct[i];
+    poly1305_stream_block16(&st, blk);
+  }
+  // 长度块: le64(aad_len) || le64(ct_len)。
+  cc20p_st64(blk, (uint64_t)aad_len);
+  cc20p_st64(blk + 8, (uint64_t)pt_len);
+  poly1305_stream_block16(&st, blk);
+
+  poly1305_stream_finalize(&st, tag, block0);
+}
+
 #ifdef __cplusplus
 }
 #endif
