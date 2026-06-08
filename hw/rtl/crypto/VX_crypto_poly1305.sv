@@ -28,6 +28,7 @@
 module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
     parameter `STRING INSTANCE_ID = "",
     parameter NUM_LANES = 1,
+    parameter STATE_LANES = NUM_LANES,  // independent Poly1305 chains held (<= NUM_LANES)
     parameter BLOCK_SIZE = 1,
     parameter BLOCK_IDX = 0
 ) (
@@ -41,6 +42,7 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
     `UNUSED_VAR(execute_if.data.rs3_data)
     `UNUSED_PARAM(BLOCK_IDX)
     `STATIC_ASSERT (`IS_DIVISBLE(`NUM_WARPS, BLOCK_SIZE), ("invalid parameter"))
+    `STATIC_ASSERT ((STATE_LANES >= 1) && (STATE_LANES <= NUM_LANES), ("invalid STATE_LANES"))
 
     localparam PID_WIDTH = `LOG2UP(`NUM_THREADS / NUM_LANES);
     localparam META_DATAW = UUID_WIDTH + NW_WIDTH + NUM_LANES + PC_BITS + 1 + NUM_REGS_BITS + PID_WIDTH + 1 + 1;
@@ -52,9 +54,9 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
     // acc limbs are 27-bit: the donna per-block fold leaves limb1 (h1) up to one
     // bit over 2^26 (poly1305.h line 73 `h1 += c` is not re-masked).
     typedef struct packed {
-        logic [NUM_LANES-1:0][4:0][25:0] r;     // clamped key limbs (26-bit)
-        logic [NUM_LANES-1:0][4:0][28:0] s;     // 5*r limbs (index 1..4 used)
-        logic [NUM_LANES-1:0][4:0][26:0] acc;   // accumulator limbs (27-bit)
+        logic [STATE_LANES-1:0][4:0][25:0] r;     // clamped key limbs (26-bit)
+        logic [STATE_LANES-1:0][4:0][28:0] s;     // 5*r limbs (index 1..4 used)
+        logic [STATE_LANES-1:0][4:0][26:0] acc;   // accumulator limbs (27-bit)
     } poly_state_t;
 
     localparam ST_IDLE  = 2'd0;
@@ -67,20 +69,20 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
     reg [1:0]                       state_r;
     reg [2:0]                       i_ctr;     // partial-product i (0..4)
     reg [2:0]                       j_ctr;     // partial-product j (0..4)
-    reg [NUM_LANES-1:0][4:0][27:0]  ha;        // acc+block, 28-bit limbs
-    reg [NUM_LANES-1:0][4:0][63:0]  dacc;      // schoolbook accumulators
+    reg [STATE_LANES-1:0][4:0][27:0]  ha;        // acc+block, 28-bit limbs
+    reg [STATE_LANES-1:0][4:0][63:0]  dacc;      // schoolbook accumulators
     // multiply pipeline: P0 operand-select regs, P1 product reg (DSP I/O regs)
-    reg [NUM_LANES-1:0][27:0]       mul_a_r;   // P0: selected ha limb
-    reg [NUM_LANES-1:0][28:0]       mul_b_r;   // P0: selected r/5r coefficient
-    reg [NUM_LANES-1:0][56:0]       prod_r;    // P1: registered product
-    reg [2:0]                       j_p1, j_p2; // accumulate target, pipelined
-    reg                             v_p1, v_p2; // pipeline stage valids
-    reg                             mul_done;   // all 25 products issued
-    reg [2:0]                       carry_step; // ST_CARRY sub-step (0..5)
-    reg [NW_WIDTH-1:0]              wid_r;
-    reg [NUM_LANES-1:0]             tmask_r;
-    reg [META_DATAW-1:0]            meta_r;
-    reg [NUM_LANES-1:0][`XLEN-1:0]  pending_data_r;
+    reg [STATE_LANES-1:0][27:0]       mul_a_r;   // P0: selected ha limb
+    reg [STATE_LANES-1:0][28:0]       mul_b_r;   // P0: selected r/5r coefficient
+    reg [STATE_LANES-1:0][56:0]       prod_r;    // P1: registered product
+    reg [2:0]                         j_p1, j_p2; // accumulate target, pipelined
+    reg                               v_p1, v_p2; // pipeline stage valids
+    reg                               mul_done;   // all 25 products issued
+    reg [2:0]                         carry_step; // ST_CARRY sub-step (0..5)
+    reg [NW_WIDTH-1:0]                wid_r;
+    reg [STATE_LANES-1:0]             tmask_r;
+    reg [META_DATAW-1:0]              meta_r;
+    reg [STATE_LANES-1:0][`XLEN-1:0]  pending_data_r;
 
     wire [NUM_LANES-1:0] tmask = execute_if.data.tmask;
 
@@ -119,8 +121,8 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
     wire       use_r    = (i_ctr <= j_ctr);
     wire [2:0] coff_idx = use_r ? (j_ctr - i_ctr) : (j_ctr - i_ctr + 3'd5);
 
-    wire [NUM_LANES-1:0][28:0] coeff_w;
-    for (genvar l = 0; l < NUM_LANES; ++l) begin : g_pp
+    wire [STATE_LANES-1:0][28:0] coeff_w;
+    for (genvar l = 0; l < STATE_LANES; ++l) begin : g_pp
         assign coeff_w[l] = use_r ? {3'b0, state_mem[widx].r[l][coff_idx]}
                                   : state_mem[widx].s[l][coff_idx];
     end
@@ -156,10 +158,10 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                                    execute_if.data.PC, execute_if.data.wb, execute_if.data.rd,
                                    execute_if.data.pid, execute_if.data.sop, execute_if.data.eop};
                         wid_r <= execute_if.data.wid;
-                        tmask_r <= tmask;
+                        tmask_r <= tmask[STATE_LANES-1:0];
                         pending_data_r <= '0;
                         if (do_setr) begin
-                            for (l = 0; l < NUM_LANES; ++l) begin
+                            for (l = 0; l < STATE_LANES; ++l) begin
                                 if (tmask[l]) begin
                                     logic [127:0] v;
                                     logic [25:0] r0, r1, r2, r3, r4;
@@ -182,7 +184,7 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                             state_r <= ST_RESP;
                         end else if (do_block) begin
                             // ha = acc + block_limbs (+ 2^128 in limb 4)
-                            for (l = 0; l < NUM_LANES; ++l) begin
+                            for (l = 0; l < STATE_LANES; ++l) begin
                                 logic [127:0] b;
                                 b = op128(execute_if.data.rs1_data[l], execute_if.data.rs2_data[l]);
                                 ha[l][0] <= {1'b0, state_mem[sidx].acc[l][0]} + {1'b0, b[25:0]};
@@ -200,7 +202,7 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                             carry_step <= '0;
                             state_r <= ST_MUL;
                         end else if (do_read) begin
-                            for (l = 0; l < NUM_LANES; ++l)
+                            for (l = 0; l < STATE_LANES; ++l)
                                 pending_data_r[l] <= `XLEN'(state_mem[sidx].acc[l][execute_if.data.rs1_data[l][2:0]]);
                             state_r <= ST_RESP;
                         end else begin
@@ -211,7 +213,7 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                 ST_MUL: begin
                     // P0: select operands into registers while issues remain
                     if (!mul_done) begin
-                        for (l = 0; l < NUM_LANES; ++l) begin
+                        for (l = 0; l < STATE_LANES; ++l) begin
                             mul_a_r[l] <= ha[l][i_ctr];
                             mul_b_r[l] <= coeff_w[l];
                         end
@@ -228,13 +230,13 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                     v_p1 <= ~mul_done;
                     j_p1 <= j_ctr;
                     // P1: multiply between registers (DSP input/output regs)
-                    for (l = 0; l < NUM_LANES; ++l)
+                    for (l = 0; l < STATE_LANES; ++l)
                         prod_r[l] <= {29'b0, mul_a_r[l]} * {28'b0, mul_b_r[l]};
                     v_p2 <= v_p1;
                     j_p2 <= j_p1;
                     // P2: accumulate -- the only single-cycle feedback path
                     if (v_p2) begin
-                        for (l = 0; l < NUM_LANES; ++l)
+                        for (l = 0; l < STATE_LANES; ++l)
                             dacc[l][j_p2] <= dacc[l][j_p2] + {7'b0, prod_r[l]};
                     end
                     if (mul_done && ~v_p1 && ~v_p2)
@@ -244,7 +246,7 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                     // donna-32 per-block carry + 2^130-5 fold, ONE carry step per
                     // cycle (same e/c sequence as the former combinational chain,
                     // so results are bit-identical; dacc holds e0..e4 in place)
-                    for (l = 0; l < NUM_LANES; ++l) begin
+                    for (l = 0; l < STATE_LANES; ++l) begin
                         case (carry_step)
                             3'd0: dacc[l][1] <= dacc[l][1] + (dacc[l][0] >> 26);
                             3'd1: dacc[l][2] <= dacc[l][2] + (dacc[l][1] >> 26);
@@ -284,7 +286,20 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
             result_if.data.pid, result_if.data.sop, result_if.data.eop} = meta_r;
 
     for (genvar i = 0; i < NUM_LANES; ++i) begin : g_wb_data
-        assign result_if.data.data[i] = `XLEN'(pending_data_r[i]);
+        if (i < STATE_LANES) begin : g_active
+            assign result_if.data.data[i] = `XLEN'(pending_data_r[i]);
+        end else begin : g_idle
+            assign result_if.data.data[i] = '0;  // chain > STATE_LANES: masked at commit
+        end
+    end
+
+    // When fewer chains than interface lanes, the high operand lanes are unused.
+    if (STATE_LANES < NUM_LANES) begin : g_unused_hi
+        wire _unused_hi = &{1'b0,
+            execute_if.data.rs1_data[NUM_LANES-1:STATE_LANES],
+            execute_if.data.rs2_data[NUM_LANES-1:STATE_LANES],
+            tmask[NUM_LANES-1:STATE_LANES], 1'b0};
+        `UNUSED_VAR(_unused_hi)
     end
 
 endmodule

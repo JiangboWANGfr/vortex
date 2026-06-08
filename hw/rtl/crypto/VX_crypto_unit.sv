@@ -32,6 +32,14 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
     // forcing the whole crypto unit through a single serialized block.
     localparam BLOCK_SIZE   = `ISSUE_WIDTH;
     localparam NUM_LANES    = `NUM_ALU_LANES;
+    // Independent crypto chains held by the stateful PEs (GHASH/Poly1305/ChaCha).
+    // Defaults to NUM_LANES (per-lane multi-chain). Set CRYPTO_STATE_LANES=1 for
+    // the area-minimal single-chain PE used with WARP dispatch.
+`ifdef CRYPTO_STATE_LANES
+    localparam STATE_LANES  = `CRYPTO_STATE_LANES;
+`else
+    localparam STATE_LANES  = NUM_LANES;
+`endif
     localparam PARTIAL_BW   = (BLOCK_SIZE != `ISSUE_WIDTH) || (NUM_LANES != `SIMD_WIDTH);
     localparam ACTIVE_PE_COUNT = `EXT_AES_ENABLED + `EXT_SHA256_ENABLED + `EXT_KECCAK_ENABLED + `EXT_GHASH_ENABLED + `EXT_POLY1305_ENABLED + `EXT_CHACHA_ENABLED;
     localparam PE_COUNT     = `UP(ACTIVE_PE_COUNT);
@@ -170,6 +178,7 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
         VX_crypto_ghash #(
             .INSTANCE_ID (`SFORMATF(("%s-ghash%0d", INSTANCE_ID, block_idx))),
             .NUM_LANES   (NUM_LANES),
+            .STATE_LANES (STATE_LANES),
             .BLOCK_SIZE  (BLOCK_SIZE),
             .BLOCK_IDX   (block_idx)
         ) ghash_unit (
@@ -184,6 +193,7 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
         VX_crypto_poly1305 #(
             .INSTANCE_ID (`SFORMATF(("%s-poly1305%0d", INSTANCE_ID, block_idx))),
             .NUM_LANES   (NUM_LANES),
+            .STATE_LANES (STATE_LANES),
             .BLOCK_SIZE  (BLOCK_SIZE),
             .BLOCK_IDX   (block_idx)
         ) poly1305_unit (
@@ -198,6 +208,7 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
         VX_crypto_chacha #(
             .INSTANCE_ID (`SFORMATF(("%s-chacha%0d", INSTANCE_ID, block_idx))),
             .NUM_LANES   (NUM_LANES),
+            .STATE_LANES (STATE_LANES),
             .BLOCK_SIZE  (BLOCK_SIZE),
             .BLOCK_IDX   (block_idx)
         ) chacha_unit (

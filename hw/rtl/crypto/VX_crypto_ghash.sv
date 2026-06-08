@@ -28,6 +28,7 @@
 module VX_crypto_ghash import VX_gpu_pkg::*; #(
     parameter `STRING INSTANCE_ID = "",
     parameter NUM_LANES = 1,
+    parameter STATE_LANES = NUM_LANES,  // independent GHASH chains held (<= NUM_LANES)
     parameter BLOCK_SIZE = 1,
     parameter BLOCK_IDX = 0
 ) (
@@ -41,10 +42,11 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
     `UNUSED_VAR(execute_if.data.rs3_data)
     `UNUSED_PARAM(BLOCK_IDX)
     `STATIC_ASSERT (`IS_DIVISBLE(`NUM_WARPS, BLOCK_SIZE), ("invalid parameter"))
+    `STATIC_ASSERT ((STATE_LANES >= 1) && (STATE_LANES <= NUM_LANES), ("invalid STATE_LANES"))
 
     typedef struct packed {
-        logic [NUM_LANES-1:0][127:0] H;   // per-lane hash subkey
-        logic [NUM_LANES-1:0][127:0] Y;   // per-lane tag accumulator
+        logic [STATE_LANES-1:0][127:0] H;   // per-chain hash subkey
+        logic [STATE_LANES-1:0][127:0] Y;   // per-chain tag accumulator
     } ghash_state_t;
 
     // GF(2^128) reduction polynomial top byte: R = 0xE1 in byte 0 (MSB).
@@ -79,13 +81,13 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
 
     reg [1:0]                    state_r;
     reg [7:0]                    bit_ctr_r;     // 0..127 multiply bit counter
-    reg [NUM_LANES-1:0][127:0]   mul_x_r;       // per-lane scanned operand (Y)
-    reg [NUM_LANES-1:0][127:0]   mul_v_r;       // per-lane shifted operand (H)
-    reg [NUM_LANES-1:0][127:0]   mul_z_r;       // per-lane product accumulator
+    reg [STATE_LANES-1:0][127:0] mul_x_r;       // per-chain scanned operand (Y)
+    reg [STATE_LANES-1:0][127:0] mul_v_r;       // per-chain shifted operand (H)
+    reg [STATE_LANES-1:0][127:0] mul_z_r;       // per-chain product accumulator
     reg [NW_WIDTH-1:0]           wid_r;
-    reg [NUM_LANES-1:0]          tmask_r;       // active-lane mask for MUL writeback
+    reg [STATE_LANES-1:0]        tmask_r;       // active-chain mask for MUL writeback
     reg [META_DATAW-1:0]         meta_r;
-    reg [NUM_LANES-1:0][`XLEN-1:0] pending_data_r;
+    reg [STATE_LANES-1:0][`XLEN-1:0] pending_data_r;
 
     wire [NUM_LANES-1:0] tmask = execute_if.data.tmask;
 
@@ -134,9 +136,9 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
         end
     endfunction
 
-    wire [NUM_LANES-1:0][127:0] mul_z_next;
-    wire [NUM_LANES-1:0][127:0] mul_v_next;
-    for (genvar l = 0; l < NUM_LANES; ++l) begin : g_mul_step
+    wire [STATE_LANES-1:0][127:0] mul_z_next;
+    wire [STATE_LANES-1:0][127:0] mul_v_next;
+    for (genvar l = 0; l < STATE_LANES; ++l) begin : g_mul_step
         wire [255:0] step = gf_radix(mul_x_r[l], mul_z_r[l], mul_v_r[l], bit_ctr_r);
         assign mul_z_next[l] = step[255:128];
         assign mul_v_next[l] = step[127:0];
@@ -166,10 +168,10 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
                                    execute_if.data.PC, execute_if.data.wb, execute_if.data.rd,
                                    execute_if.data.pid, execute_if.data.sop, execute_if.data.eop};
                         wid_r <= execute_if.data.wid;
-                        tmask_r <= tmask;
+                        tmask_r <= tmask[STATE_LANES-1:0];
                         pending_data_r <= '0;
                         if (do_seth) begin
-                            for (l = 0; l < NUM_LANES; ++l) begin
+                            for (l = 0; l < STATE_LANES; ++l) begin
                                 if (tmask[l]) begin
                                     state_mem[sidx].H[l][execute_if.data.rs2_data[l][WSEL_BITS-1:0]*`XLEN +: `XLEN]
                                         <= execute_if.data.rs1_data[l];
@@ -177,7 +179,7 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
                             end
                             state_r <= ST_RESP;
                         end else if (do_xor) begin
-                            for (l = 0; l < NUM_LANES; ++l) begin
+                            for (l = 0; l < STATE_LANES; ++l) begin
                                 if (tmask[l]) begin
                                     state_mem[sidx].Y[l][execute_if.data.rs2_data[l][WSEL_BITS-1:0]*`XLEN +: `XLEN]
                                         <= state_mem[sidx].Y[l][execute_if.data.rs2_data[l][WSEL_BITS-1:0]*`XLEN +: `XLEN]
@@ -186,13 +188,13 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
                             end
                             state_r <= ST_RESP;
                         end else if (do_read) begin
-                            for (l = 0; l < NUM_LANES; ++l) begin
+                            for (l = 0; l < STATE_LANES; ++l) begin
                                 pending_data_r[l]
                                     <= state_mem[sidx].Y[l][execute_if.data.rs1_data[l][WSEL_BITS-1:0]*`XLEN +: `XLEN];
                             end
                             state_r <= ST_RESP;
                         end else if (do_mul) begin
-                            for (l = 0; l < NUM_LANES; ++l) begin
+                            for (l = 0; l < STATE_LANES; ++l) begin
                                 mul_x_r[l] <= state_mem[sidx].Y[l];
                                 mul_v_r[l] <= state_mem[sidx].H[l];
                                 mul_z_r[l] <= '0;
@@ -205,12 +207,12 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
                     end
                 end
                 ST_MUL: begin
-                    for (l = 0; l < NUM_LANES; ++l) begin
+                    for (l = 0; l < STATE_LANES; ++l) begin
                         mul_z_r[l] <= mul_z_next[l];
                         mul_v_r[l] <= mul_v_next[l];
                     end
                     if (bit_ctr_r == 8'(128 - MUL_RADIX)) begin
-                        for (l = 0; l < NUM_LANES; ++l) begin
+                        for (l = 0; l < STATE_LANES; ++l) begin
                             if (tmask_r[l]) begin
                                 state_mem[ghash_state_idx(wid_r)].Y[l] <= mul_z_next[l];
                             end
@@ -237,7 +239,20 @@ module VX_crypto_ghash import VX_gpu_pkg::*; #(
             result_if.data.pid, result_if.data.sop, result_if.data.eop} = meta_r;
 
     for (genvar i = 0; i < NUM_LANES; ++i) begin : g_wb_data
-        assign result_if.data.data[i] = `XLEN'(pending_data_r[i]);
+        if (i < STATE_LANES) begin : g_active
+            assign result_if.data.data[i] = `XLEN'(pending_data_r[i]);
+        end else begin : g_idle
+            assign result_if.data.data[i] = '0;  // chain > STATE_LANES: masked at commit
+        end
+    end
+
+    // When fewer chains than interface lanes, the high operand lanes are unused.
+    if (STATE_LANES < NUM_LANES) begin : g_unused_hi
+        wire _unused_hi = &{1'b0,
+            execute_if.data.rs1_data[NUM_LANES-1:STATE_LANES],
+            execute_if.data.rs2_data[NUM_LANES-1:STATE_LANES],
+            tmask[NUM_LANES-1:STATE_LANES], 1'b0};
+        `UNUSED_VAR(_unused_hi)
     end
 
 endmodule

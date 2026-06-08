@@ -33,6 +33,7 @@
 module VX_crypto_chacha import VX_gpu_pkg::*; #(
     parameter `STRING INSTANCE_ID = "",
     parameter NUM_LANES = 1,
+    parameter STATE_LANES = NUM_LANES,  // independent cipher chains held (<= NUM_LANES)
     parameter BLOCK_SIZE = 1,
     parameter BLOCK_IDX = 0
 ) (
@@ -46,6 +47,7 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
     `UNUSED_VAR(execute_if.data.rs3_data)
     `UNUSED_PARAM(BLOCK_IDX)
     `STATIC_ASSERT (`IS_DIVISBLE(`NUM_WARPS, BLOCK_SIZE), ("invalid parameter"))
+    `STATIC_ASSERT ((STATE_LANES >= 1) && (STATE_LANES <= NUM_LANES), ("invalid STATE_LANES"))
 
     // Quarter-rounds chained per cycle (design-space knob); BLOCK = 80/RADIX cyc.
 `ifdef CHACHA_QR_RADIX
@@ -77,17 +79,17 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
     localparam ST_FEEDFWD = 2'd2;
     localparam ST_RESP    = 2'd3;
 
-    // Per-warp, per-lane ChaCha state: 16 x 32-bit words.
-    logic [NUM_LANES-1:0][15:0][31:0] state_mem [STATE_WARPS];
+    // Per-warp, per-chain ChaCha state: 16 x 32-bit words (STATE_LANES chains).
+    logic [STATE_LANES-1:0][15:0][31:0] state_mem [STATE_WARPS];
 
-    reg [1:0]                       state_r;
-    reg [NUM_LANES-1:0][15:0][31:0] x_r;       // working buffer (C x[])
-    reg [NUM_LANES-1:0][15:0][31:0] st_r;      // feedforward snapshot (C st[])
-    reg [8:0]                       perm_ctr_r; // 0..PERM_STEPS-1
-    reg [NW_WIDTH-1:0]              wid_r;
-    reg [NUM_LANES-1:0]             tmask_r;
-    reg [META_DATAW-1:0]            meta_r;
-    reg [NUM_LANES-1:0][`XLEN-1:0]  pending_data_r;
+    reg [1:0]                         state_r;
+    reg [STATE_LANES-1:0][15:0][31:0] x_r;       // working buffer (C x[])
+    reg [STATE_LANES-1:0][15:0][31:0] st_r;      // feedforward snapshot (C st[])
+    reg [8:0]                         perm_ctr_r; // 0..PERM_STEPS-1
+    reg [NW_WIDTH-1:0]                wid_r;
+    reg [STATE_LANES-1:0]             tmask_r;
+    reg [META_DATAW-1:0]              meta_r;
+    reg [STATE_LANES-1:0][`XLEN-1:0]  pending_data_r;
 
     wire [NUM_LANES-1:0] tmask = execute_if.data.tmask;
 
@@ -234,16 +236,16 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
                                    execute_if.data.PC, execute_if.data.wb, execute_if.data.rd,
                                    execute_if.data.pid, execute_if.data.sop, execute_if.data.eop};
                         wid_r <= execute_if.data.wid;
-                        tmask_r <= tmask;
+                        tmask_r <= tmask[STATE_LANES-1:0];
                         pending_data_r <= '0;
                         if (do_write) begin
-                            for (l = 0; l < NUM_LANES; ++l)
+                            for (l = 0; l < STATE_LANES; ++l)
                                 if (tmask[l])
                                     state_mem[sidx][l][execute_if.data.rs2_data[l][WSEL_BITS-1:0]]
                                         <= execute_if.data.rs1_data[l][31:0];
                             state_r <= ST_RESP;
                         end else if (do_read) begin
-                            for (l = 0; l < NUM_LANES; ++l)
+                            for (l = 0; l < STATE_LANES; ++l)
                                 pending_data_r[l]
                                     <= `XLEN'(state_mem[sidx][l][execute_if.data.rs1_data[l][WSEL_BITS-1:0]]);
                             state_r <= ST_RESP;
@@ -258,7 +260,7 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
                     end
                 end
                 ST_PERMUTE: begin
-                    for (l = 0; l < NUM_LANES; ++l)
+                    for (l = 0; l < STATE_LANES; ++l)
 `ifdef CHACHA_QR_QUARTER
                         x_r[l] <= perm_quarter(x_r[l], perm_ctr_r);
 `elsif CHACHA_QR_HALF
@@ -272,7 +274,7 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
                         perm_ctr_r <= perm_ctr_r + 9'd1;
                 end
                 ST_FEEDFWD: begin
-                    for (l = 0; l < NUM_LANES; ++l)
+                    for (l = 0; l < STATE_LANES; ++l)
                         if (tmask_r[l])
                             for (w = 0; w < 16; ++w)
                                 state_mem[widx][l][w] <= x_r[l][w] + st_r[l][w];
@@ -294,7 +296,20 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
             result_if.data.pid, result_if.data.sop, result_if.data.eop} = meta_r;
 
     for (genvar i = 0; i < NUM_LANES; ++i) begin : g_wb_data
-        assign result_if.data.data[i] = `XLEN'(pending_data_r[i]);
+        if (i < STATE_LANES) begin : g_active
+            assign result_if.data.data[i] = `XLEN'(pending_data_r[i]);
+        end else begin : g_idle
+            assign result_if.data.data[i] = '0;  // lane > STATE_LANES: masked at commit
+        end
+    end
+
+    // When fewer chains than interface lanes, the high operand lanes are unused.
+    if (STATE_LANES < NUM_LANES) begin : g_unused_hi
+        wire _unused_hi = &{1'b0,
+            execute_if.data.rs1_data[NUM_LANES-1:STATE_LANES],
+            execute_if.data.rs2_data[NUM_LANES-1:STATE_LANES],
+            tmask[NUM_LANES-1:STATE_LANES], 1'b0};
+        `UNUSED_VAR(_unused_hi)
     end
 
 endmodule
