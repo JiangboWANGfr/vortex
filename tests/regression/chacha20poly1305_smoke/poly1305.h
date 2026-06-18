@@ -296,8 +296,16 @@ static inline void poly1305_stream_init(poly1305_stream_t* st, const uint8_t key
 // 吸收一个满 16 字节块 (NATIVE: PE BLOCK; SOFTWARE: 霍纳链一步)。
 static inline void poly1305_stream_block16(poly1305_stream_t* st, const uint8_t blk[16]) {
 #ifdef POLY1305_NATIVE
-  uint64_t blo = (uint64_t)poly_le32(blk)     | ((uint64_t)poly_le32(blk + 4)  << 32);
-  uint64_t bhi = (uint64_t)poly_le32(blk + 8) | ((uint64_t)poly_le32(blk + 12) << 32);
+  // 8 字节对齐时直接两次 64-bit 字读取 (Poly1305 是小端, 无需字节反转), 把每块
+  // 16 次字节 load 降到 2 次字 load; 未对齐 (残块/AAD 补零缓冲) 回退到逐字节。
+  uint64_t blo, bhi;
+  if ((((uintptr_t)blk) & 7u) == 0u) {
+    blo = *(const uint64_t *)__builtin_assume_aligned(blk, 8);
+    bhi = *(const uint64_t *)__builtin_assume_aligned(blk + 8, 8);
+  } else {
+    blo = (uint64_t)poly_le32(blk)     | ((uint64_t)poly_le32(blk + 4)  << 32);
+    bhi = (uint64_t)poly_le32(blk + 8) | ((uint64_t)poly_le32(blk + 12) << 32);
+  }
   __intrin_poly1305_block(blo, bhi);
 #else
   poly1305_blocks(st->h, st->r, st->r5, blk, 16);
