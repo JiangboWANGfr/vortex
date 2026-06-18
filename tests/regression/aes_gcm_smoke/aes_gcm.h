@@ -137,14 +137,25 @@ static inline void aes256_gcm_encrypt(const uint8_t key[GCM_KEY_BYTES],
   // inc32^2(J0), ... (J0 itself is reserved for the tag). Each keystream block
   // E_K(ctr) is XORed into the plaintext to produce ciphertext. ---
   uint8_t ctr[GCM_BLOCK_BYTES] __attribute__((aligned(4)));
-  uint8_t ks[GCM_BLOCK_BYTES] __attribute__((aligned(4)));
+  uint8_t ks[GCM_BLOCK_BYTES] __attribute__((aligned(8)));
   memcpy(ctr, J0, GCM_BLOCK_BYTES);
   size_t off = 0;
   // Full 16-byte blocks.
   for (; off + GCM_BLOCK_BYTES <= pt_len; off += GCM_BLOCK_BYTES) {
     gcm_inc32(ctr);
     aes256_ecb_enc(ctr, round_keys, ks, 1);
-    for (int i = 0; i < GCM_BLOCK_BYTES; ++i) ct[off + i] = pt[off + i] ^ ks[i];
+    // Word-granular XOR (raw bytes, endian-agnostic): two 64-bit ld/xor/sd per
+    // 16B block instead of 16 byte loads + 16 stores, when pt/ct/ks are 8-byte
+    // aligned. Bit-identical; byte fallback keeps arbitrary callers correct.
+    if (((((uintptr_t)(pt + off)) | ((uintptr_t)(ct + off)) | (uintptr_t)ks) & 7u) == 0u) {
+      const uint64_t *pw = (const uint64_t *)__builtin_assume_aligned(pt + off, 8);
+      const uint64_t *kw = (const uint64_t *)__builtin_assume_aligned(ks, 8);
+      uint64_t *cw = (uint64_t *)__builtin_assume_aligned(ct + off, 8);
+      cw[0] = pw[0] ^ kw[0];
+      cw[1] = pw[1] ^ kw[1];
+    } else {
+      for (int i = 0; i < GCM_BLOCK_BYTES; ++i) ct[off + i] = pt[off + i] ^ ks[i];
+    }
   }
   // Trailing partial block: only XOR (and emit) the bytes that exist; the
   // unused keystream tail is simply discarded.
