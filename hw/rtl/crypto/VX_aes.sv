@@ -871,6 +871,10 @@ module VX_aes64 #(
         endcase
     endfunction
 
+`ifndef AES_SBOX_RADIX
+    // ===== Parallel S-box: 8 forward (+8 inverse) S-boxes per lane, full round
+    // in one cycle. Default. AES_SBOX_RADIX (below) trades this for a serial,
+    // time-multiplexed S-box. =====
     wire [LANES-1:0][7:0][7:0] fwd_sbox_in;
     wire [LANES-1:0][7:0][7:0] fwd_sbox_out;
 `ifndef CRYPTO_AES_ENC_ONLY
@@ -970,5 +974,122 @@ module VX_aes64 #(
             result_r <= result_next;
         end
     end
+`else
+    // ===== Serialized S-box (AES_SBOX_RADIX): one FSM time-multiplexing RADIX
+    // forward S-boxes over 8/RADIX cycles instead of 8 in parallel -- the AES
+    // analogue of GHASH_MUL_RADIX / CHACHA_QR_*. Encrypt-only datapath
+    // (es/esm/ks1i forward + ks2); the inverse cipher is not supported here. =====
+    localparam RADIX     = `AES_SBOX_RADIX;
+    localparam SUB_STEPS = 8 / RADIX;
+    `STATIC_ASSERT (((8 % RADIX) == 0) && (RADIX >= 1) && (RADIX <= 8), ("AES_SBOX_RADIX must divide 8"))
+`ifndef CRYPTO_AES_ENC_ONLY
+    localparam AES_RADIX_NEEDS_ENC_ONLY = 0;
+    `STATIC_ASSERT (AES_RADIX_NEEDS_ENC_ONLY, ("AES_SBOX_RADIX requires CRYPTO_AES_ENC_ONLY"))
+`endif
+
+    localparam ST_IDLE = 2'd0;
+    localparam ST_SUB  = 2'd1;
+    localparam ST_RESP = 2'd2;
+
+    reg [1:0]                 state_r;
+    reg [2:0]                 ctr_r;     // 0..SUB_STEPS-1
+    reg [LANES-1:0][63:0]     op1_r;
+    reg [LANES-1:0][63:0]     op2_r;
+    reg [3:0]                 rnd_r;
+    reg                       es_r, esm_r, ks1i_r, ks2_r;
+    reg [LANES-1:0][7:0][7:0] sub_r;     // accumulated SubBytes output
+
+    `UNUSED_VAR ({op_aes64ds, op_aes64dsm, op_aes64im})
+
+    wire [LANES-1:0][RADIX-1:0][7:0] sb_out;
+
+    assign ready_in  = (state_r == ST_IDLE);
+    assign valid_out = (state_r == ST_RESP);
+
+    for (genvar i = 0; i < LANES; ++i) begin : g_lane
+        wire [31:0] rs1_lo = op1_r[i][31:0];
+        wire [31:0] rs1_hi = op1_r[i][63:32];
+        wire [31:0] rs2_lo = op2_r[i][31:0];
+        wire [31:0] rs2_hi = op2_r[i][63:32];
+        `UNUSED_VAR (rs1_lo)   // forward ShiftRows reads only bytes 0,3 of rs1_lo
+
+        wire [31:0] shift_fwd_lo = pack_bytes(rs1_lo[7:0], rs1_hi[15:8], rs2_lo[23:16], rs2_hi[31:24]);
+        wire [31:0] shift_fwd_hi = pack_bytes(rs1_hi[7:0], rs2_lo[15:8], rs2_hi[23:16], rs1_lo[31:24]);
+        wire [31:0] ks1_word = (rnd_r == 4'ha) ? rs1_hi : {rs1_hi[7:0], rs1_hi[31:8]};
+
+        // 8-byte forward S-box input: ShiftRows output, or key-schedule word (ks1i)
+        wire [7:0][7:0] fwd_in;
+        for (genvar j = 0; j < 4; ++j) begin : g_fin_lo
+            assign fwd_in[j] = ks1i_r ? get_byte32(ks1_word, j) : get_byte32(shift_fwd_lo, j);
+        end
+        for (genvar j = 4; j < 8; ++j) begin : g_fin_hi
+            assign fwd_in[j] = ks1i_r ? 8'h00 : get_byte32(shift_fwd_hi, j - 4);
+        end
+
+        // RADIX S-boxes substituting bytes [ctr_r*RADIX .. +RADIX-1] this cycle
+        for (genvar k = 0; k < RADIX; ++k) begin : g_sbox
+            wire [7:0] sb_in = fwd_in[3'(ctr_r * RADIX + k)];
+            riscv_crypto_sbox_aes_lut fwd_sbox (.out(sb_out[i][k]), .in(sb_in));
+        end
+
+        wire [31:0] sub_lo = pack_bytes(sub_r[i][0], sub_r[i][1], sub_r[i][2], sub_r[i][3]);
+        wire [31:0] sub_hi = pack_bytes(sub_r[i][4], sub_r[i][5], sub_r[i][6], sub_r[i][7]);
+        reg [63:0] lane_result;
+        always @(*) begin
+            lane_result = '0;
+            if (esm_r)
+                lane_result = {mixcolumn_fwd(sub_hi), mixcolumn_fwd(sub_lo)};
+            else if (ks1i_r)
+                lane_result = {sub_lo ^ aes_rcon(rnd_r), sub_lo ^ aes_rcon(rnd_r)};
+            else if (ks2_r) begin
+                lane_result[31:0]  = rs1_hi ^ rs2_lo;
+                lane_result[63:32] = (rs1_hi ^ rs2_lo) ^ rs2_hi;
+            end else if (es_r)
+                lane_result = {sub_hi, sub_lo};
+        end
+        assign result[i] = lane_result;
+    end
+
+    integer li, ki;
+    always @(posedge clk) begin
+        if (reset) begin
+            state_r <= ST_IDLE;
+            ctr_r   <= '0;
+            es_r    <= 1'b0; esm_r <= 1'b0; ks1i_r <= 1'b0; ks2_r <= 1'b0;
+        end else begin
+            case (state_r)
+                ST_IDLE: begin
+                    if (valid_in) begin
+                        for (li = 0; li < LANES; li = li + 1) begin
+                            op1_r[li] <= rs1_data[li];
+                            op2_r[li] <= rs2_data[li];
+                        end
+                        rnd_r   <= round_imm;
+                        es_r    <= op_aes64es;
+                        esm_r   <= op_aes64esm;
+                        ks1i_r  <= op_aes64ks1i;
+                        ks2_r   <= op_aes64ks2;
+                        ctr_r   <= '0;
+                        state_r <= op_aes64ks2 ? ST_RESP : ST_SUB;   // ks2 needs no S-box
+                    end
+                end
+                ST_SUB: begin
+                    for (li = 0; li < LANES; li = li + 1)
+                        for (ki = 0; ki < RADIX; ki = ki + 1)
+                            sub_r[li][3'(ctr_r * RADIX + ki)] <= sb_out[li][ki];
+                    if (ctr_r == 3'(SUB_STEPS - 1))
+                        state_r <= ST_RESP;
+                    else
+                        ctr_r <= ctr_r + 3'd1;
+                end
+                ST_RESP: begin
+                    if (ready_out)
+                        state_r <= ST_IDLE;
+                end
+                default: state_r <= ST_IDLE;
+            endcase
+        end
+    end
+`endif
 
 endmodule
