@@ -64,6 +64,14 @@ ifneq (,$(findstring -DEXT_TCU_ENABLE, $(CONFIGS)))
 	RTL_PKGS += $(THIRD_PARTY_DIR)/hardfloat/source/recFNToRecFN.v
 endif
 
+# AES uses a multi-module aggregate file (VX_aes.sv holds VX_aes + VX_aes64 +
+# the S-box primitives). Compile it explicitly so VX_aes64 is found even when the
+# RV32 VX_aes unit is not instantiated (RV64 builds) -- Verilator otherwise only
+# -y discovers the file by the VX_aes module name. (Quartus already lists it.)
+ifneq (,$(findstring -DEXT_AES_ENABLE, $(CONFIGS)))
+	RTL_PKGS += $(RTL_DIR)/crypto/VX_aes.sv
+endif
+
 RTL_PKGS += $(RTL_DIR)/VX_trace_pkg.sv
 
 SRCS = $(SW_COMMON_DIR)/util.cpp $(SW_COMMON_DIR)/mem.cpp $(SW_COMMON_DIR)/softfloat_ext.cpp $(SW_COMMON_DIR)/rvfloats.cpp $(SW_COMMON_DIR)/dram_sim.cpp

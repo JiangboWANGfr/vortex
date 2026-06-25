@@ -32,9 +32,10 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
     // forcing the whole crypto unit through a single serialized block.
     localparam BLOCK_SIZE   = `ISSUE_WIDTH;
     localparam NUM_LANES    = `NUM_ALU_LANES;
-    // Independent crypto chains held by the stateful PEs (GHASH/Poly1305/ChaCha).
+    // Independent crypto chains held by the stateful PEs (GHASH/Poly1305/ChaCha),
+    // and the active round-datapath count of the stateless AES PE.
     // Defaults to NUM_LANES (per-lane multi-chain). Set CRYPTO_STATE_LANES=1 for
-    // the area-minimal single-chain PE used with WARP dispatch.
+    // the area-minimal single-lane PE used with WARP dispatch.
 `ifdef CRYPTO_STATE_LANES
     localparam STATE_LANES  = `CRYPTO_STATE_LANES;
 `else
@@ -139,7 +140,8 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
     `ifdef EXT_AES_ENABLE
         VX_crypto_aes #(
             .INSTANCE_ID (`SFORMATF(("%s-aes%0d", INSTANCE_ID, block_idx))),
-            .NUM_LANES   (NUM_LANES)
+            .NUM_LANES   (NUM_LANES),
+            .STATE_LANES (STATE_LANES)
         ) aes_unit (
             .clk        (clk),
             .reset      (reset),
