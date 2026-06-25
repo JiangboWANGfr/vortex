@@ -804,6 +804,12 @@ module VX_aes64 #(
         end
     endfunction
 
+`ifndef CRYPTO_AES_ENC_ONLY
+    // InvMixColumns: only the inverse cipher (decryption) needs it. Set
+    // CRYPTO_AES_ENC_ONLY=1 for an AEAD/CTR-only build (AES-GCM never runs the
+    // inverse cipher) to drop the whole decrypt datapath -- the 8 inverse
+    // S-boxes per lane and this InvMixColumns -- keeping only the forward cipher
+    // + key schedule (aes64es/esm/ks1i/ks2).
     function automatic [31:0] mixcolumn_inv(input [31:0] word);
         reg [7:0] b0, b1, b2, b3;
         reg [7:0] x0, x1, x2, x3;
@@ -834,6 +840,7 @@ module VX_aes64 #(
             );
         end
     endfunction
+`endif
 
     function automatic [31:0] aes_rcon(input [3:0] round);
         case (round)
@@ -865,9 +872,11 @@ module VX_aes64 #(
     endfunction
 
     wire [LANES-1:0][7:0][7:0] fwd_sbox_in;
-    wire [LANES-1:0][7:0][7:0] inv_sbox_in;
     wire [LANES-1:0][7:0][7:0] fwd_sbox_out;
+`ifndef CRYPTO_AES_ENC_ONLY
+    wire [LANES-1:0][7:0][7:0] inv_sbox_in;
     wire [LANES-1:0][7:0][7:0] inv_sbox_out;
+`endif
 
     wire [LANES-1:0][63:0] result_next;
     reg  [LANES-1:0][63:0] result_r;
@@ -877,6 +886,10 @@ module VX_aes64 #(
     assign valid_out = valid_r;
     assign result = result_r;
 
+`ifdef CRYPTO_AES_ENC_ONLY
+    `UNUSED_VAR ({op_aes64ds, op_aes64dsm, op_aes64im})
+`endif
+
     for (genvar i = 0; i < LANES; ++i) begin : g_lane
         wire [31:0] rs1_lo = rs1_data[i][31:0];
         wire [31:0] rs1_hi = rs1_data[i][63:32];
@@ -885,32 +898,43 @@ module VX_aes64 #(
 
         wire [31:0] shift_fwd_lo = pack_bytes(rs1_lo[7:0], rs1_hi[15:8], rs2_lo[23:16], rs2_hi[31:24]);
         wire [31:0] shift_fwd_hi = pack_bytes(rs1_hi[7:0], rs2_lo[15:8], rs2_hi[23:16], rs1_lo[31:24]);
+`ifndef CRYPTO_AES_ENC_ONLY
         wire [31:0] shift_inv_lo = pack_bytes(rs1_lo[7:0], rs2_hi[15:8], rs2_lo[23:16], rs1_hi[31:24]);
         wire [31:0] shift_inv_hi = pack_bytes(rs1_hi[7:0], rs1_lo[15:8], rs2_hi[23:16], rs2_lo[31:24]);
+`else
+        // forward ShiftRows uses only bytes 0 and 3 of rs1_lo here
+        `UNUSED_VAR (rs1_lo)
+`endif
         wire [31:0] ks1_word = (round_imm == 4'ha) ? rs1_hi : {rs1_hi[7:0], rs1_hi[31:8]};
 
         for (genvar j = 0; j < 4; ++j) begin : g_sbox_lo
             wire [7:0] shift_fwd_byte = get_byte32(shift_fwd_lo, j);
-            wire [7:0] shift_inv_byte = get_byte32(shift_inv_lo, j);
             assign fwd_sbox_in[i][j] = op_aes64ks1i ? get_byte32(ks1_word, j) : shift_fwd_byte;
-            assign inv_sbox_in[i][j] = shift_inv_byte;
             riscv_crypto_sbox_aes_lut  fwd_sbox (.out(fwd_sbox_out[i][j]), .in(fwd_sbox_in[i][j]));
+`ifndef CRYPTO_AES_ENC_ONLY
+            wire [7:0] shift_inv_byte = get_byte32(shift_inv_lo, j);
+            assign inv_sbox_in[i][j] = shift_inv_byte;
             riscv_crypto_sbox_aesi_lut inv_sbox (.out(inv_sbox_out[i][j]), .in(inv_sbox_in[i][j]));
+`endif
         end
 
         for (genvar j = 4; j < 8; ++j) begin : g_sbox_hi
             wire [7:0] shift_fwd_byte = get_byte32(shift_fwd_hi, j - 4);
-            wire [7:0] shift_inv_byte = get_byte32(shift_inv_hi, j - 4);
             assign fwd_sbox_in[i][j] = op_aes64ks1i ? 8'h00 : shift_fwd_byte;
-            assign inv_sbox_in[i][j] = shift_inv_byte;
             riscv_crypto_sbox_aes_lut  fwd_sbox (.out(fwd_sbox_out[i][j]), .in(fwd_sbox_in[i][j]));
+`ifndef CRYPTO_AES_ENC_ONLY
+            wire [7:0] shift_inv_byte = get_byte32(shift_inv_hi, j - 4);
+            assign inv_sbox_in[i][j] = shift_inv_byte;
             riscv_crypto_sbox_aesi_lut inv_sbox (.out(inv_sbox_out[i][j]), .in(inv_sbox_in[i][j]));
+`endif
         end
 
         wire [31:0] sub_fwd_lo = pack_bytes(fwd_sbox_out[i][0], fwd_sbox_out[i][1], fwd_sbox_out[i][2], fwd_sbox_out[i][3]);
         wire [31:0] sub_fwd_hi = pack_bytes(fwd_sbox_out[i][4], fwd_sbox_out[i][5], fwd_sbox_out[i][6], fwd_sbox_out[i][7]);
+`ifndef CRYPTO_AES_ENC_ONLY
         wire [31:0] sub_inv_lo = pack_bytes(inv_sbox_out[i][0], inv_sbox_out[i][1], inv_sbox_out[i][2], inv_sbox_out[i][3]);
         wire [31:0] sub_inv_hi = pack_bytes(inv_sbox_out[i][4], inv_sbox_out[i][5], inv_sbox_out[i][6], inv_sbox_out[i][7]);
+`endif
 
         reg [63:0] lane_result;
         always @(*) begin
@@ -919,12 +943,14 @@ module VX_aes64 #(
                 lane_result = {sub_fwd_hi, sub_fwd_lo};
             end else if (op_aes64esm) begin
                 lane_result = {mixcolumn_fwd(sub_fwd_hi), mixcolumn_fwd(sub_fwd_lo)};
+`ifndef CRYPTO_AES_ENC_ONLY
             end else if (op_aes64ds) begin
                 lane_result = {sub_inv_hi, sub_inv_lo};
             end else if (op_aes64dsm) begin
                 lane_result = {mixcolumn_inv(sub_inv_hi), mixcolumn_inv(sub_inv_lo)};
             end else if (op_aes64im) begin
                 lane_result = {mixcolumn_inv(rs1_hi), mixcolumn_inv(rs1_lo)};
+`endif
             end else if (op_aes64ks1i) begin
                 lane_result = {sub_fwd_lo ^ aes_rcon(round_imm), sub_fwd_lo ^ aes_rcon(round_imm)};
             end else if (op_aes64ks2) begin
