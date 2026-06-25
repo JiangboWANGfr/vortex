@@ -84,7 +84,6 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
 
     reg [1:0]                         state_r;
     reg [STATE_LANES-1:0][15:0][31:0] x_r;       // working buffer (C x[])
-    reg [STATE_LANES-1:0][15:0][31:0] st_r;      // feedforward snapshot (C st[])
     reg [8:0]                         perm_ctr_r; // 0..PERM_STEPS-1
     reg [NW_WIDTH-1:0]                wid_r;
     reg [STATE_LANES-1:0]             tmask_r;
@@ -221,7 +220,6 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
             state_r        <= ST_IDLE;
             perm_ctr_r     <= '0;
             x_r            <= '0;
-            st_r           <= '0;
             wid_r          <= '0;
             tmask_r        <= '0;
             meta_r         <= '0;
@@ -251,7 +249,10 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
                             state_r <= ST_RESP;
                         end else if (do_block) begin
                             x_r        <= state_mem[sidx];
-                            st_r       <= state_mem[sidx];  // snapshot for feedforward
+                            // no feedforward snapshot: state_mem[sidx] stays the
+                            // pre-permute state (PERMUTE writes only x_r, and the PE
+                            // accepts no new op until ST_RESP), so ST_FEEDFWD reads
+                            // the original directly from state_mem.
                             perm_ctr_r <= '0;
                             state_r    <= ST_PERMUTE;
                         end else begin
@@ -277,7 +278,7 @@ module VX_crypto_chacha import VX_gpu_pkg::*; #(
                     for (l = 0; l < STATE_LANES; ++l)
                         if (tmask_r[l])
                             for (w = 0; w < 16; ++w)
-                                state_mem[widx][l][w] <= x_r[l][w] + st_r[l][w];
+                                state_mem[widx][l][w] <= x_r[l][w] + state_mem[widx][l][w];
                     state_r <= ST_RESP;
                 end
                 ST_RESP: begin
