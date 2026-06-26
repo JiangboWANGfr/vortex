@@ -64,13 +64,28 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
     localparam ST_CARRY = 2'd2;
     localparam ST_RESP  = 2'd3;
 
+    // Parallel-multiply design-space knob (analogue of GHASH_MUL_RADIX): do
+    // POLY_MUL_RADIX schoolbook products per cycle. Unset (default) = the
+    // area-minimal pipelined 1-product/cycle multiply (25 cycles). 5 = one
+    // column/cycle (5 multipliers, 5 cycles); 25 = every product in one cycle
+    // (25 multipliers). The 5x5 product result is bit-identical regardless.
+`ifdef POLY_MUL_RADIX
+    localparam POLY_RADIX   = `POLY_MUL_RADIX;
+    `STATIC_ASSERT ((POLY_RADIX == 5) || (POLY_RADIX == 25), ("POLY_MUL_RADIX must be 5 or 25 (omit for the default 1)"))
+    localparam COLS_PER_CYC = POLY_RADIX / 5;    // 5->1 col/cyc, 25->5 cols/cyc
+    localparam MUL_STEPS    = 5 / COLS_PER_CYC;  // 5->5 cyc, 25->1 cyc
+`endif
+
     poly_state_t state_mem [STATE_WARPS];
 
     reg [1:0]                       state_r;
+`ifndef POLY_MUL_RADIX
     reg [2:0]                       i_ctr;     // partial-product i (0..4)
     reg [2:0]                       j_ctr;     // partial-product j (0..4)
+`endif
     reg [STATE_LANES-1:0][4:0][27:0]  ha;        // acc+block, 28-bit limbs
     reg [STATE_LANES-1:0][4:0][63:0]  dacc;      // schoolbook accumulators
+`ifndef POLY_MUL_RADIX
     // multiply pipeline: P0 operand-select regs, P1 product reg (DSP I/O regs)
     reg [STATE_LANES-1:0][27:0]       mul_a_r;   // P0: selected ha limb
     reg [STATE_LANES-1:0][28:0]       mul_b_r;   // P0: selected r/5r coefficient
@@ -78,6 +93,9 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
     reg [2:0]                         j_p1, j_p2; // accumulate target, pipelined
     reg                               v_p1, v_p2; // pipeline stage valids
     reg                               mul_done;   // all 25 products issued
+`else
+    reg [2:0]                         col_step;   // parallel-multiply column step
+`endif
     reg [2:0]                         carry_step; // ST_CARRY sub-step (0..5)
     reg [NW_WIDTH-1:0]                wid_r;
     reg [STATE_LANES-1:0]             tmask_r;
@@ -114,6 +132,7 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
 `endif
     endfunction
 
+`ifndef POLY_MUL_RADIX
     // Per-lane one-product-per-cycle schoolbook:
     //   dacc[j] += ha[i] * coeff,  coeff = (i<=j) ? r[j-i] : 5*r[j-i+5]
     // P0 selects the operands, P1 multiplies between registers, P2 accumulates;
@@ -126,15 +145,19 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
         assign coeff_w[l] = use_r ? {3'b0, state_mem[widx].r[l][coff_idx]}
                                   : state_mem[widx].s[l][coff_idx];
     end
+`endif
 
     integer w, l;
     always_ff @(posedge clk) begin
         if (reset) begin
             state_r        <= ST_IDLE;
+`ifndef POLY_MUL_RADIX
             i_ctr          <= '0;
             j_ctr          <= '0;
+`endif
             ha             <= '0;
             dacc           <= '0;
+`ifndef POLY_MUL_RADIX
             mul_a_r        <= '0;
             mul_b_r        <= '0;
             prod_r         <= '0;
@@ -143,6 +166,9 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
             v_p1           <= 0;
             v_p2           <= 0;
             mul_done       <= 0;
+`else
+            col_step       <= '0;
+`endif
             carry_step     <= '0;
             wid_r          <= '0;
             tmask_r        <= '0;
@@ -194,11 +220,15 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                                 ha[l][4] <= {1'b0, state_mem[sidx].acc[l][4]} + {4'b0, b[127:104]} + 28'h1000000; // +2^128 (bit 24 of limb4)
                                 for (int q = 0; q < 5; ++q) dacc[l][q] <= '0;
                             end
+`ifndef POLY_MUL_RADIX
                             i_ctr <= '0;
                             j_ctr <= '0;
                             v_p1 <= 0;
                             v_p2 <= 0;
                             mul_done <= 0;
+`else
+                            col_step <= '0;
+`endif
                             carry_step <= '0;
                             state_r <= ST_MUL;
                         end else if (do_read) begin
@@ -211,6 +241,7 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                     end
                 end
                 ST_MUL: begin
+`ifndef POLY_MUL_RADIX
                     // P0: select operands into registers while issues remain
                     if (!mul_done) begin
                         for (l = 0; l < STATE_LANES; ++l) begin
@@ -241,6 +272,33 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                     end
                     if (mul_done && ~v_p1 && ~v_p2)
                         state_r <= ST_CARRY;
+`else
+                    // Parallel: COLS_PER_CYC columns this cycle, each column
+                    // dacc[jj] = sum_i ha[i] * coeff(i,jj),
+                    // coeff(i,jj) = (i<=jj) ? r[jj-i] : 5r[5+jj-i]. Bit-identical
+                    // to the serial path (same products, summed combinationally).
+                    for (l = 0; l < STATE_LANES; ++l) begin
+                        for (int cc = 0; cc < COLS_PER_CYC; ++cc) begin
+                            int          jj;
+                            logic [63:0] colsum;
+                            jj = col_step * COLS_PER_CYC + cc;
+                            colsum = '0;
+                            for (int ii = 0; ii < 5; ++ii) begin
+                                logic [28:0] cf;
+                                if (ii <= jj)
+                                    cf = {3'b0, state_mem[widx].r[l][jj - ii]};
+                                else
+                                    cf = state_mem[widx].s[l][jj + 5 - ii];
+                                colsum = colsum + {7'b0, ({29'b0, ha[l][ii]} * {28'b0, cf})};
+                            end
+                            dacc[l][jj] <= colsum;
+                        end
+                    end
+                    if (col_step == 3'(MUL_STEPS - 1))
+                        state_r <= ST_CARRY;
+                    else
+                        col_step <= col_step + 3'd1;
+`endif
                 end
                 ST_CARRY: begin
                     // donna-32 per-block carry + 2^130-5 fold, ONE carry step per
