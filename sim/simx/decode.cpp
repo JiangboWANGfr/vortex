@@ -794,7 +794,12 @@ decode_integer_alu:
         break;
       }
       case 5: { // RV32I: SRA/SRL
-        instr->setOpType((funct7 == 0x20) ? AluType::SRA : AluType::SRL);
+        // On RV64, SRAI's shamt is 6 bits and its top bit lands in funct7[0] (see
+        // the imm assembly above), so funct7 reads 0x21 for shamt >= 32. Mask that
+        // bit out before comparing, otherwise an arithmetic shift by >= 32 decodes
+        // as a logical one. The RTL gets this right by testing funct7[5] only
+        // (hw/rtl/core/VX_decode.sv).
+        instr->setOpType(((funct7 & 0x7e) == 0x20) ? AluType::SRA : AluType::SRL);
         break;
       }
       case 6: { // RV32I: OR
