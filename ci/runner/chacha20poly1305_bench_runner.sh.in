@@ -38,7 +38,8 @@ Two modes:
 Usage: $0 [options]
 
 Options:
-  --mode=<overhead|radix|poly-radix>  (default: overhead)
+  --mode=<overhead|radix|poly-radix|qr-step>  (default: overhead)
+  --qr-step=<csv>                qr-step mode; full|half|quarter (BLOCK 80/160/320 cyc)
   --driver=<simx|rtlsim|de10pro> (default: rtlsim; radix forces rtlsim)
   --accel-modes=<csv>            overhead (default: UNPROTECTED,SOFTWARE,NATIVE)
   --dispatch=<csv>               WARP,LANE (default: WARP)
@@ -93,7 +94,22 @@ build_native_driver() {
     # Poly1305 schoolbook products per cycle: unset = the area-minimal pipelined
     # 1 product/cycle (25 cycles); 5 = one column/cycle; 25 = fully parallel.
     [[ -n "${2:-}" && "$2" != "default" ]] && cfg="$cfg -DPOLY_MUL_RADIX=$2"
+    # Sub-QR stepping: how much of a quarter-round the PE completes per cycle.
+    # This is the Fmax lever (a deeper cycle costs end-to-end time), distinct
+    # from --qr-radix, which is the width lever. BLOCK = 80 / 160 / 320 cycles.
+    case "${3:-full}" in
+        full)    ;;
+        half)    cfg="$cfg -DCHACHA_QR_HALF" ;;
+        quarter) cfg="$cfg -DCHACHA_QR_QUARTER" ;;
+    esac
     build_driver_runtime_common "$DRIVER" 5000 "CONFIGS=$cfg"
+}
+
+validate_qr_step() {
+    case "$1" in
+        full|half|quarter) ;;
+        *) die "unsupported qr step: $1; supported: full half quarter" ;;
+    esac
 }
 
 validate_poly_radix() {
@@ -261,10 +277,57 @@ run_poly_radix() {
     [[ "$failures" -eq 0 ]]
 }
 
+# ChaCha sub-QR stepping. BLOCK gets SLOWER (80 -> 160 -> 320 cycles) to shorten
+# the critical path for Fmax. Unlike every other knob here this one is partially
+# exposed end-to-end, which is exactly why it is worth measuring.
+run_qr_step() {
+    [[ "$DRIVER" == "rtlsim" ]] || die "qr-step mode requires --driver=rtlsim (simx models no per-op FU result latency)"
+    local app_dir="$ROOT_DIR/tests/crypto/chacha-poly/chacha20poly1305_bench"
+    local step dispatch
+    for step in "${QR_STEPS[@]}"; do validate_qr_step "$step"; done
+    for dispatch in "${DISPATCHES[@]}"; do validate_dispatch "$dispatch"; done
+
+    local failures=0
+    local -a rows=()
+    for step in "${QR_STEPS[@]}"; do
+        build_native_driver "1" "default" "$step"
+        local blockcyc
+        case "$step" in full) blockcyc=80 ;; half) blockcyc=160 ;; quarter) blockcyc=320 ;; esac
+        for dispatch in "${DISPATCHES[@]}"; do
+            local build_args=("make" "-C" "$app_dir" "clean" "all" "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR"
+                              "CHACHA20POLY1305_ACCEL_MODE=NATIVE" "CHACHA_BENCH_DISPATCH=$dispatch")
+            while IFS= read -r f; do [[ -n "$f" ]] && build_args+=("$f"); done < <(join_flags)
+            run_cmd "${build_args[@]}"
+            local bytes
+            for bytes in "${BYTES_LIST[@]}"; do
+                local log="$LOG_DIR/ccp-qrstep-${dispatch}-${step}-n${bytes}-${DRIVER}.log" status
+                if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$DRIVER" \
+                        "CHACHA20POLY1305_ACCEL_MODE=NATIVE" "CHACHA_BENCH_DISPATCH=$dispatch" \
+                        "OPTS=-t $TASKS -n $bytes" >"$log" 2>&1; then status="PASS"; else status="FAIL"; failures=$((failures+1)); fi
+                local perf instrs cycles ipc checksum
+                perf=$(extract_perf "$log"); IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
+                checksum=$(extract_field "checksum" "$log")
+                rows+=("$dispatch"$'\x1f'"$step"$'\x1f'"$blockcyc"$'\x1f'"$bytes"$'\x1f'"$instrs"$'\x1f'"$cycles"$'\x1f'"$ipc"$'\x1f'"${checksum:-}"$'\x1f'"$status"$'\x1f'"$log")
+            done
+        done
+    done
+
+    printf 'algo\taccel_mode\tdispatch\tqr_step\tblock_cycles\tdriver\tnum_tasks\tbytes_per_task\tinstrs\tcycles\tipc\tchecksum\tstatus\tlog\n' > "$RESULTS"
+    local row
+    for row in "${rows[@]}"; do
+        IFS=$'\x1f' read -r dispatch step blockcyc bytes instrs cycles ipc checksum status log <<< "$row"
+        printf 'chacha20\tNATIVE\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$dispatch" "$step" "$blockcyc" "$DRIVER" "$TASKS" "$bytes" "$instrs" "$cycles" "$ipc" "$checksum" "$status" "$log" >> "$RESULTS"
+    done
+    echo "ChaCha20 sub-QR stepping design-space -> $RESULTS"
+    [[ "$failures" -eq 0 ]]
+}
+
 main() {
     RUNNER_NAME="chacha20poly1305_bench"
     MODE="overhead"; DRIVER="rtlsim"; STARTUP_ADDR=""
     POLY_RADIX="default,5,25"
+    QR_STEP="full,half,quarter"
     EXT_F_DISABLE=0; EXT_D_DISABLE=0; DEBUG_LEVEL=0
     TASKS=""; BYTES="256,1024"; QR_RADIX="1,2,4,5,8,10,16,20,40,80"; ITERS=256
     OUTPUT_ROOT="$ROOT_DIR/runner_output"; RESULTS=""; LOG_DIR=""
@@ -278,6 +341,7 @@ main() {
             --dispatch=*) dispatch_list="${1#*=}" ;;
             --qr-radix=*) QR_RADIX="${1#*=}" ;;
             --poly-radix=*) POLY_RADIX="${1#*=}" ;;
+            --qr-step=*) QR_STEP="${1#*=}" ;;
             --tasks=*) TASKS="${1#*=}" ;;
             --bytes=*) BYTES="${1#*=}" ;;
             --iters=*) ITERS="${1#*=}" ;;
@@ -300,6 +364,7 @@ main() {
     IFS=',' read -r -a DISPATCHES <<< "$dispatch_list"
     IFS=',' read -r -a QR_RADICES <<< "$QR_RADIX"
     IFS=',' read -r -a POLY_RADICES <<< "$POLY_RADIX"
+    IFS=',' read -r -a QR_STEPS <<< "$QR_STEP"
     IFS=',' read -r -a BYTES_LIST <<< "$BYTES"
     # radix mode defaults to 1 warp/core (-t 1: 1 group -> 1 warp -> 1 core, no
     # warp-level latency hiding). overhead defaults to 32 streams (full machine).
@@ -316,6 +381,7 @@ main() {
         case "$MODE" in
             radix)      RESULTS="$OUTPUT_ROOT/$RUNNER_NAME/results/$DRIVER/design_space.tsv" ;;
             poly-radix) RESULTS="$OUTPUT_ROOT/$RUNNER_NAME/results/$DRIVER/poly_design_space.tsv" ;;
+            qr-step)    RESULTS="$OUTPUT_ROOT/$RUNNER_NAME/results/$DRIVER/qr_step_design_space.tsv" ;;
         esac
     fi
     init_single_driver_output
@@ -331,7 +397,8 @@ main() {
         overhead) run_overhead ;;
         radix)    run_radix ;;
         poly-radix) run_poly_radix ;;
-        *) die "unknown --mode=$MODE; supported: overhead radix poly-radix" ;;
+        qr-step)    run_qr_step ;;
+        *) die "unknown --mode=$MODE; supported: overhead radix poly-radix qr-step" ;;
     esac
 }
 

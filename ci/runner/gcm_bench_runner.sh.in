@@ -44,6 +44,10 @@ Options:
                                     aes64es/esm/ks1i and implies --enc-only
                                     (VX_aes.sv never serializes the inverse
                                     cipher). RTLSIM ONLY for the latency result.
+  --num-cores=<csv>                 NUM_CORES sweep, e.g. 1,2,4,8. Rebuilds the
+                                    driver per core count; note Vortex couples
+                                    NUM_CORES with the socket/L2 hierarchy, so
+                                    this is whole-system scaling.
   --state-lanes=<csv>               CRYPTO_STATE_LANES sweep: default|1|<n>.
                                     1 collapses the stateful PEs to a single
                                     chain; only valid with --dispatch=WARP.
@@ -85,11 +89,11 @@ validate_dispatch() {
 # only rtlsim can measure a latency knob; simx runs still serve as a bit-exactness
 # check (the checksum column must not move).
 hw_config_label() {
-    printf 'sbox=%s,lanes=%s,enc=%s' "$1" "$2" "$3"
+    printf 'sbox=%s,lanes=%s,enc=%s,cores=%s' "$1" "$2" "$3" "$4"
 }
 
 driver_configs() {
-    local need_native="$1" sbox="$2" lanes="$3" enc="$4"
+    local need_native="$1" sbox="$2" lanes="$3" enc="$4" cores="$5"
     local cfg=""
     if [[ "$need_native" -eq 1 ]]; then
         cfg="-DEXT_AES_ENABLE -DEXT_GHASH_ENABLE"
@@ -97,16 +101,21 @@ driver_configs() {
         [[ "$sbox"  != "default" ]] && cfg="$cfg -DAES_SBOX_RADIX=$sbox"
         [[ "$lanes" != "default" ]] && cfg="$cfg -DCRYPTO_STATE_LANES=$lanes"
     fi
+    # NUM_CORES is a machine-configuration knob rather than a crypto one, but it
+    # reaches the simulator the same way. The generated VX_config.h keeps its
+    # #ifndef so -D overrides it, and SOCKET_SIZE adapts, which makes this a
+    # whole-system scaling sweep, not a pure core-count one.
+    [[ "$cores" != "default" ]] && cfg="$cfg -DNUM_CORES=$cores"
     [[ -n "$cfg" ]] && printf '%s\n' "CONFIGS=$cfg"
     return 0
 }
 
 build_driver_runtime() {
-    local need_native="$1" sbox="$2" lanes="$3" enc="$4"
+    local need_native="$1" sbox="$2" lanes="$3" enc="$4" cores="$5"
     local args=()
     while IFS= read -r flag; do
         [[ -n "$flag" ]] && args+=("$flag")
-    done < <(driver_configs "$need_native" "$sbox" "$lanes" "$enc")
+    done < <(driver_configs "$need_native" "$sbox" "$lanes" "$enc" "$cores")
     build_driver_runtime_common "$DRIVER" 5000 "${args[@]}"
 }
 
@@ -159,6 +168,7 @@ main() {
     dispatch_list="WARP,LANE"
     sbox_radix_list="default"
     state_lanes_list="default"
+    num_cores_list="default"
     ENC_ONLY=0
 
     while [[ $# -gt 0 ]]; do
@@ -168,6 +178,7 @@ main() {
             --dispatch=*) dispatch_list="${1#*=}" ;;
             --sbox-radix=*) sbox_radix_list="${1#*=}" ;;
             --state-lanes=*) state_lanes_list="${1#*=}" ;;
+            --num-cores=*) num_cores_list="${1#*=}" ;;
             --enc-only) ENC_ONLY=1 ;;
             --tasks=*) TASKS="${1#*=}" ;;
             --bytes=*) BYTES="${1#*=}" ;;
@@ -190,6 +201,7 @@ main() {
     IFS=',' read -r -a BYTES_LIST <<< "$BYTES"
     IFS=',' read -r -a SBOX_RADICES <<< "$sbox_radix_list"
     IFS=',' read -r -a STATE_LANES_LIST <<< "$state_lanes_list"
+    IFS=',' read -r -a NUM_CORES_LIST <<< "$num_cores_list"
 
     local need_native=0 mode dispatch bytes
     for mode in "${ACCEL_MODES[@]}"; do
@@ -201,6 +213,7 @@ main() {
     local sweeping_hw=0
     [[ "$sbox_radix_list"   != "default" ]] && sweeping_hw=1
     [[ "$state_lanes_list"  != "default" ]] && sweeping_hw=1
+    [[ "$num_cores_list"    != "default" ]] && sweeping_hw=1
     if [[ "$sweeping_hw" -eq 1 ]]; then
         [[ "$need_native" -eq 1 ]] || die "--sbox-radix/--state-lanes require NATIVE in --accel-modes"
         if [[ "$DRIVER" != "rtlsim" ]]; then
@@ -238,16 +251,17 @@ main() {
     declare -A unprot_cycles=()
     declare -A soft_cycles=()
 
-    local sbox lanes enc hwcfg
+    local sbox lanes enc cores hwcfg
     for sbox in "${SBOX_RADICES[@]}"; do
       for lanes in "${STATE_LANES_LIST[@]}"; do
+       for cores in "${NUM_CORES_LIST[@]}"; do
         enc="$ENC_ONLY"
         # VX_aes.sv STATIC_ASSERTs that the serial S-box implies the encrypt-only
         # datapath; it never implements the inverse cipher.
         [[ "$sbox" != "default" ]] && enc=1
-        hwcfg=$(hw_config_label "$sbox" "$lanes" "$enc")
+        hwcfg=$(hw_config_label "$sbox" "$lanes" "$enc" "$cores")
         echo "== hardware config $hwcfg =="
-        build_driver_runtime "$need_native" "$sbox" "$lanes" "$enc"
+        build_driver_runtime "$need_native" "$sbox" "$lanes" "$enc" "$cores"
 
     for mode in "${ACCEL_MODES[@]}"; do
         for dispatch in "${DISPATCHES[@]}"; do
@@ -286,6 +300,7 @@ main() {
             done
         done
     done
+       done
       done
     done
 
