@@ -130,6 +130,14 @@ int run_cbc_enc_case(aes256_status_t* status) {
 } // namespace
 
 int main() {
+  // The cases below share the file-scope g_output/g_round_keys buffers and
+  // accumulate into status->errors non-atomically, while vx_spawn_threads only
+  // activates core 0 for these tasks. Without this guard every core races on
+  // both. tests/kernel/aes256/main.cpp has had the same guard since 550c437.
+  if (vx_core_id() != 0) {
+    return 0;
+  }
+
   kernel_arg_t* __UNIFORM__ arg = (kernel_arg_t*)csr_read(VX_CSR_MSCRATCH);
   aes256_status_t* status = (aes256_status_t*)arg->status_addr;
   status->errors = 0;

@@ -30,9 +30,9 @@ Variants:
   scalar : tests/crypto/aes-gcm/ghash_smoke      (one GHASH chain per warp)
   simt   : tests/crypto/aes-gcm/ghash_simt_smoke  (vx_spawn_threads fan-out)
 
-NOTE: NATIVE + simt is skipped — the GHASH PE holds one {H,Y} state per
-warp, so independent per-lane chains would clobber each other. Per-lane
-state (warp-level multi-chain) is future work.
+NOTE: NATIVE + simt exercises the per-lane multi-chain GHASH state. It is
+skipped only when the driver is built with CRYPTO_STATE_LANES=1, which
+collapses the PE to a single chain and leaves lanes 1..N-1 without state.
 
 Usage:
   $0 [options]
@@ -187,8 +187,12 @@ main() {
         done
 
         for variant in "${VARIANTS[@]}"; do
-            if [[ "$mode" == "NATIVE" && "$variant" == "simt" ]]; then
-                echo "== SKIP ghash mode=NATIVE variant=simt (per-warp state) =="
+            # Per-lane chains need STATE_LANES > 1, which is the default
+            # (STATE_LANES = NUM_LANES since 762d4cd). Only a single-chain build
+            # cannot run this combination.
+            if [[ "$mode" == "NATIVE" && "$variant" == "simt" \
+                  && "${driver_cfg[*]}" == *CRYPTO_STATE_LANES=1* ]]; then
+                echo "== SKIP ghash mode=NATIVE variant=simt (single-chain build) =="
                 continue
             fi
 
@@ -198,11 +202,10 @@ main() {
 
             local build_args=("make" "-C" "$app_dir" "clean" "all"
                               "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR")
-            # GHASH_ACCEL_MODE is only meaningful for the scalar app's Makefile;
-            # the simt app ignores it (software only).
-            if [[ "$variant" == "scalar" ]]; then
-                build_args+=("GHASH_ACCEL_MODE=$mode")
-            fi
+            # Both apps honour GHASH_ACCEL_MODE: they share ghash_ref.h, which
+            # dispatches on GHASH_NATIVE. For the simt app, NATIVE is what
+            # exercises the per-lane multi-chain state.
+            build_args+=("GHASH_ACCEL_MODE=$mode")
             while IFS= read -r flag; do
                 [[ -n "$flag" ]] && build_args+=("$flag")
             done < <(join_flags)
