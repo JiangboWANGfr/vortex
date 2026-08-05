@@ -125,6 +125,11 @@ setup_de10pro_env() {
     export DE10PRO_VX_STAGING_SIZE="${DE10PRO_VX_STAGING_SIZE:-0x200000}"
 }
 
+# The runners own driver construction: they rebuild it per accel-mode and per
+# design-space knob, with CONFIGS the test Makefiles never see. Tell the test
+# harness not to rebuild it back to the test's own CONFIGS.
+export VX_SKIP_DRIVER_BUILD=1
+
 build_driver_runtime_common() {
     local driver="$1"
     local de10pro_timeout="${2:-5000}"

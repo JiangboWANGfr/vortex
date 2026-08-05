@@ -148,9 +148,17 @@ run-simx: $(PROJECT) kernel.vxbin
 # and executes as an unrelated ALU op, so the test reports wrong results instead
 # of failing to build. sim/rtlsim/Makefile keeps a stamp of its verilator flags,
 # so this is a no-op unless CONFIGS actually changed.
+# Runners build the driver themselves, often with CONFIGS the test does not know
+# about (design-space knobs such as AES_SBOX_RADIX live only in the driver). They
+# set VX_SKIP_DRIVER_BUILD=1 so this rule does not rebuild it back to the test's
+# own CONFIGS and silently undo the sweep.
 .PHONY: driver-rtlsim
 driver-rtlsim:
-	$(MAKE) -C $(VORTEX_RT_PATH)/rtlsim CONFIGS='$(CONFIGS)'
+	@if [ "$(VX_SKIP_DRIVER_BUILD)" = "1" ]; then \
+	  echo "driver-rtlsim: skipped, caller manages the driver"; \
+	else \
+	  $(MAKE) -C $(VORTEX_RT_PATH)/rtlsim CONFIGS='$(CONFIGS)'; \
+	fi
 
 run-rtlsim: $(PROJECT) kernel.vxbin driver-rtlsim
 	LD_LIBRARY_PATH=$(VORTEX_RT_PATH):$(LD_LIBRARY_PATH) VORTEX_DRIVER=rtlsim ./$(PROJECT) $(OPTS)
