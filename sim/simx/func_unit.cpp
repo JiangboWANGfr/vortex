@@ -130,10 +130,19 @@ void AluUnit::tick() {
 			case AesType::DSMI:
 			case AesType::ES64:
 			case AesType::ESM64:
+			case AesType::KS1I64:
+#ifdef AES_SBOX_RADIX
+				// Serial S-box FSM: ST_SUB runs 8/RADIX SubBytes steps before
+				// ST_RESP. aes64ks2 needs no S-box and stays at the default.
+				// Must track VX_aes.sv or simx and rtlsim disagree.
+				delay = (8 / AES_SBOX_RADIX) + 2;
+#else
+				delay = 2;
+#endif
+				break;
 			case AesType::DS64:
 			case AesType::DSM64:
 			case AesType::IM64:
-			case AesType::KS1I64:
 			case AesType::KS2_64:
 				delay = 2;
 				break;
@@ -170,9 +179,17 @@ void AluUnit::tick() {
 					delay = 2;
 					break;
 				case PolyType::BLOCK:
+#ifdef POLY_MUL_RADIX
+					// Parallel schoolbook: ST_MUL runs MUL_STEPS = 5/(RADIX/5)
+					// column steps with no pipeline drain, then the same per-limb
+					// carry/fold (6) + ha load + accept/resp. Must track
+					// VX_crypto_poly1305.sv or simx and rtlsim disagree.
+					delay = (5 / (POLY_MUL_RADIX / 5)) + 9;
+#else
 					// pipelined 5x5 schoolbook (25 products + 3 drain) + per-limb
 					// carry/fold (6) + ha load + accept/resp
 					delay = 35 + 2;
+#endif
 					break;
 				default:
 					std::abort();

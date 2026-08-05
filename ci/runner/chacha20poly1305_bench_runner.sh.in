@@ -23,6 +23,12 @@ Two modes:
                     simx is insensitive to the crypto-FU (BLOCK) latency (its
                     coarse timing model does not expose it), so on simx NATIVE
                     looks artificially free.
+  --mode=poly-radix : NATIVE-only POLY_MUL_RADIX sweep, RTLSIM ONLY. Rebuilds
+                    librtlsim per radix (ST_MUL = 28 cycles pipelined by default,
+                    5 at radix 5, 1 at radix 25) and runs the FULL AEAD path --
+                    compute-only isolates ChaCha and never fires the Poly PE.
+                    The checksum must stay identical across radices.
+
   --mode=radix    : NATIVE-only CHACHA_QR_RADIX sweep, RTLSIM ONLY (simx is
                     insensitive to the radix). Rebuilds librtlsim per radix
                     (BLOCK = 80/radix cycles), forces the compute-isolated
@@ -32,11 +38,12 @@ Two modes:
 Usage: $0 [options]
 
 Options:
-  --mode=<overhead|radix>        (default: overhead)
+  --mode=<overhead|radix|poly-radix>  (default: overhead)
   --driver=<simx|rtlsim|de10pro> (default: rtlsim; radix forces rtlsim)
   --accel-modes=<csv>            overhead (default: UNPROTECTED,SOFTWARE,NATIVE)
   --dispatch=<csv>               WARP,LANE (default: WARP)
   --qr-radix=<csv>               radix mode; must divide 80
+  --poly-radix=<csv>             poly-radix mode; default|5|25 (default: default,5,25)
                                  (default: 1,2,4,5,8,10,16,20,40,80)
   --tasks=<n>                    streams (default: 32 overhead, 8 radix)
   --bytes=<csv>                  bytes/stream, multiple of 16 (overhead; default 256,1024)
@@ -83,7 +90,18 @@ validate_radix() {
 build_native_driver() {
     local cfg="-DEXT_CHACHA_ENABLE -DEXT_POLY1305_ENABLE"
     [[ -n "${1:-}" && "$1" != "1" ]] && cfg="$cfg -DCHACHA_QR_RADIX=$1"
+    # Poly1305 schoolbook products per cycle: unset = the area-minimal pipelined
+    # 1 product/cycle (25 cycles); 5 = one column/cycle; 25 = fully parallel.
+    [[ -n "${2:-}" && "$2" != "default" ]] && cfg="$cfg -DPOLY_MUL_RADIX=$2"
     build_driver_runtime_common "$DRIVER" 5000 "CONFIGS=$cfg"
+}
+
+validate_poly_radix() {
+    # VX_crypto_poly1305.sv STATIC_ASSERTs POLY_MUL_RADIX in {5,25}; omit for 1.
+    case "$1" in
+        default|5|25) ;;
+        *) die "unsupported POLY_MUL_RADIX=$1; use default (1 product/cycle), 5 or 25" ;;
+    esac
 }
 
 extract_field() {
@@ -194,9 +212,59 @@ run_radix() {
     [[ "$failures" -eq 0 ]]
 }
 
+# Poly1305 multiply design space. Unlike the ChaCha QR sweep this cannot use
+# CHACHA_BENCH_COMPUTE_ONLY, which isolates the ChaCha block and never runs the
+# Poly PE -- the full AEAD path is required for the Poly multiplier to be on the
+# critical path at all.
+run_poly_radix() {
+    [[ "$DRIVER" == "rtlsim" ]] || die "poly-radix mode requires --driver=rtlsim (simx models no per-op FU result latency)"
+    local app_dir="$ROOT_DIR/tests/crypto/chacha-poly/chacha20poly1305_bench"
+    local radix dispatch
+    for radix in "${POLY_RADICES[@]}"; do validate_poly_radix "$radix"; done
+    for dispatch in "${DISPATCHES[@]}"; do validate_dispatch "$dispatch"; done
+
+    local failures=0
+    local -a rows=()
+    for radix in "${POLY_RADICES[@]}"; do
+        build_native_driver "1" "$radix"   # rebuild librtlsim with this Poly radix
+        for dispatch in "${DISPATCHES[@]}"; do
+            local build_args=("make" "-C" "$app_dir" "clean" "all" "XLEN=$XLEN" "STARTUP_ADDR=$STARTUP_ADDR"
+                              "CHACHA20POLY1305_ACCEL_MODE=NATIVE" "CHACHA_BENCH_DISPATCH=$dispatch")
+            while IFS= read -r f; do [[ -n "$f" ]] && build_args+=("$f"); done < <(join_flags)
+            run_cmd "${build_args[@]}"
+            local bytes
+            for bytes in "${BYTES_LIST[@]}"; do
+                local log="$LOG_DIR/ccp-polyradix-${dispatch}-r${radix}-n${bytes}-${DRIVER}.log" status
+                if env CCACHE_DISABLE=1 make -C "$app_dir" "run-$DRIVER" \
+                        "CHACHA20POLY1305_ACCEL_MODE=NATIVE" "CHACHA_BENCH_DISPATCH=$dispatch" \
+                        "OPTS=-t $TASKS -n $bytes" >"$log" 2>&1; then status="PASS"; else status="FAIL"; failures=$((failures+1)); fi
+                local perf instrs cycles ipc checksum mulcyc
+                perf=$(extract_perf "$log"); IFS=$'\t' read -r instrs cycles ipc <<< "$perf"
+                checksum=$(extract_field "checksum" "$log")
+                # ST_MUL length: default pipeline is 25 products + 3 drain.
+                if [[ "$radix" == "default" ]]; then mulcyc=28; else mulcyc=$((5 / (radix / 5))); fi
+                rows+=("$dispatch"$'\x1f'"$radix"$'\x1f'"$mulcyc"$'\x1f'"$bytes"$'\x1f'"$instrs"$'\x1f'"$cycles"$'\x1f'"$ipc"$'\x1f'"${checksum:-}"$'\x1f'"$status"$'\x1f'"$log")
+            done
+        done
+    done
+
+    printf 'algo\taccel_mode\tdispatch\tpoly_radix\tmul_cycles\tdriver\tnum_tasks\tbytes_per_task\tinstrs\tcycles\tipc\tchecksum\tstatus\tlog\n' > "$RESULTS"
+    local row
+    for row in "${rows[@]}"; do
+        IFS=$'\x1f' read -r dispatch radix mulcyc bytes instrs cycles ipc checksum status log <<< "$row"
+        printf 'poly1305\tNATIVE\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "$dispatch" "$radix" "$mulcyc" "$DRIVER" "$TASKS" "$bytes" "$instrs" "$cycles" "$ipc" "$checksum" "$status" "$log" >> "$RESULTS"
+    done
+    echo "Poly1305 multiply design-space -> $RESULTS"
+    echo "NOTE: the checksum column must be identical across radices -- the"
+    echo "      multiply is bit-exact regardless of how many products per cycle."
+    [[ "$failures" -eq 0 ]]
+}
+
 main() {
     RUNNER_NAME="chacha20poly1305_bench"
     MODE="overhead"; DRIVER="rtlsim"; STARTUP_ADDR=""
+    POLY_RADIX="default,5,25"
     EXT_F_DISABLE=0; EXT_D_DISABLE=0; DEBUG_LEVEL=0
     TASKS=""; BYTES="256,1024"; QR_RADIX="1,2,4,5,8,10,16,20,40,80"; ITERS=256
     OUTPUT_ROOT="$ROOT_DIR/runner_output"; RESULTS=""; LOG_DIR=""
@@ -209,6 +277,7 @@ main() {
             --accel-modes=*) accel_list="${1#*=}" ;;
             --dispatch=*) dispatch_list="${1#*=}" ;;
             --qr-radix=*) QR_RADIX="${1#*=}" ;;
+            --poly-radix=*) POLY_RADIX="${1#*=}" ;;
             --tasks=*) TASKS="${1#*=}" ;;
             --bytes=*) BYTES="${1#*=}" ;;
             --iters=*) ITERS="${1#*=}" ;;
@@ -230,6 +299,7 @@ main() {
     IFS=',' read -r -a ACCEL_MODES <<< "$accel_list"
     IFS=',' read -r -a DISPATCHES <<< "$dispatch_list"
     IFS=',' read -r -a QR_RADICES <<< "$QR_RADIX"
+    IFS=',' read -r -a POLY_RADICES <<< "$POLY_RADIX"
     IFS=',' read -r -a BYTES_LIST <<< "$BYTES"
     # radix mode defaults to 1 warp/core (-t 1: 1 group -> 1 warp -> 1 core, no
     # warp-level latency hiding). overhead defaults to 32 streams (full machine).
@@ -254,7 +324,8 @@ main() {
     case "$MODE" in
         overhead) run_overhead ;;
         radix)    run_radix ;;
-        *) die "unknown --mode=$MODE; supported: overhead radix" ;;
+        poly-radix) run_poly_radix ;;
+        *) die "unknown --mode=$MODE; supported: overhead radix poly-radix" ;;
     esac
 }
 
