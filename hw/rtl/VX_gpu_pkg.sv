@@ -299,6 +299,9 @@ package VX_gpu_pkg;
     localparam INST_CRYPTO_POLY_SETR  = 4'b1100;
     localparam INST_CRYPTO_POLY_BLOCK = 4'b1101;
     localparam INST_CRYPTO_POLY_RD    = 4'b1110;
+    // RV32 only: commit the staged 128-bit operand into r. Like every other
+    // INST_CRYPTO_* nibble this is private to its CRYPTO_CLASS.
+    localparam INST_CRYPTO_POLY_SETRB = 4'b1111;
     // ChaCha20 op nibbles are private to CRYPTO_CLASS_CHACHA (interpreted only
     // after crypto.unit selects the PE), so reusing 0x0..0x2 is collision-free.
     localparam INST_CRYPTO_CHACHA_WR    = 4'b0000;

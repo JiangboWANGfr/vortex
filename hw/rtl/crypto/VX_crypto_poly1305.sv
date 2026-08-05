@@ -57,6 +57,12 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
         logic [STATE_LANES-1:0][4:0][25:0] r;     // clamped key limbs (26-bit)
         logic [STATE_LANES-1:0][4:0][28:0] s;     // 5*r limbs (index 1..4 used)
         logic [STATE_LANES-1:0][4:0][26:0] acc;   // accumulator limbs (27-bit)
+`ifndef XLEN_64
+        // RV32 only: two source registers hold 64 bits, so the 128-bit SETR/BLOCK
+        // operand is staged here a word at a time before being consumed. Gated on
+        // XLEN so the RV64 netlist is unchanged.
+        logic [STATE_LANES-1:0][127:0]     opbuf;
+`endif
     } poly_state_t;
 
     localparam ST_IDLE  = 2'd0;
@@ -123,14 +129,18 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
     wire do_block = (execute_if.data.op_type == INST_CRYPTO_POLY_BLOCK);
     wire do_read  = (execute_if.data.op_type == INST_CRYPTO_POLY_RD);
 
-    // 128-bit operand from two XLEN registers (RV64: {hi,lo}; RV32 unsupported).
-    function automatic [127:0] op128(input [`XLEN-1:0] lo, input [`XLEN-1:0] hi);
-`ifdef XLEN_64
-        op128 = {hi, lo};
-`else
-        op128 = {{(128-`XLEN){1'b0}}, lo};
+`ifndef XLEN_64
+    wire do_setrb = (execute_if.data.op_type == INST_CRYPTO_POLY_SETRB);
+    localparam WSEL_BITS = `CLOG2(128 / `XLEN);   // RV32: 4 words, 2 index bits
 `endif
+
+    // 128-bit operand from two XLEN registers: RV64 packs it as {hi,lo}; RV32 has
+    // only 64 bits of source register, so it reads the staged opbuf instead.
+`ifdef XLEN_64
+    function automatic [127:0] op128(input [`XLEN-1:0] lo, input [`XLEN-1:0] hi);
+        op128 = {hi, lo};
     endfunction
+`endif
 
 `ifndef POLY_MUL_RADIX
     // Per-lane one-product-per-cycle schoolbook:
@@ -186,12 +196,20 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                         wid_r <= execute_if.data.wid;
                         tmask_r <= tmask[STATE_LANES-1:0];
                         pending_data_r <= '0;
+`ifdef XLEN_64
                         if (do_setr) begin
+`else
+                        if (do_setrb) begin
+`endif
                             for (l = 0; l < STATE_LANES; ++l) begin
                                 if (tmask[l]) begin
                                     logic [127:0] v;
                                     logic [25:0] r0, r1, r2, r3, r4;
+`ifdef XLEN_64
                                     v  = op128(execute_if.data.rs1_data[l], execute_if.data.rs2_data[l]);
+`else
+                                    v  = state_mem[sidx].opbuf[l];
+`endif
                                     r0 = v[25:0];   r1 = v[51:26];  r2 = v[77:52];
                                     r3 = v[103:78]; r4 = {2'b0, v[127:104]};
                                     state_mem[sidx].r[l][0] <= r0;
@@ -208,11 +226,27 @@ module VX_crypto_poly1305 import VX_gpu_pkg::*; #(
                                 end
                             end
                             state_r <= ST_RESP;
+`ifndef XLEN_64
+                        end else if (do_setr) begin
+                            // RV32: stage one XLEN-wide word of the 128-bit operand
+                            // (data in rs1, word index in rs2), mirroring GHASH SETH.
+                            for (l = 0; l < STATE_LANES; ++l) begin
+                                if (tmask[l]) begin
+                                    state_mem[sidx].opbuf[l][execute_if.data.rs2_data[l][WSEL_BITS-1:0]*`XLEN +: `XLEN]
+                                        <= execute_if.data.rs1_data[l];
+                                end
+                            end
+                            state_r <= ST_RESP;
+`endif
                         end else if (do_block) begin
                             // ha = acc + block_limbs (+ 2^128 in limb 4)
                             for (l = 0; l < STATE_LANES; ++l) begin
                                 logic [127:0] b;
+`ifdef XLEN_64
                                 b = op128(execute_if.data.rs1_data[l], execute_if.data.rs2_data[l]);
+`else
+                                b = state_mem[sidx].opbuf[l];
+`endif
                                 ha[l][0] <= {1'b0, state_mem[sidx].acc[l][0]} + {1'b0, b[25:0]};
                                 ha[l][1] <= {1'b0, state_mem[sidx].acc[l][1]} + {1'b0, b[51:26]};
                                 ha[l][2] <= {1'b0, state_mem[sidx].acc[l][2]} + {1'b0, b[77:52]};

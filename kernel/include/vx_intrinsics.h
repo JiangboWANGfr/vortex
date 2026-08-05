@@ -339,8 +339,10 @@ static inline void __intrin_ghash_mul(void) {
 //           3=BLOCK (acc=(acc+{rs2,rs1}+2^128)*r).
 // funct3 follows the class-wide convention: 0=write state, 1=accumulate-xor
 // (unused here), 2=read state, 3=run the multi-cycle primitive.
-// SETR/BLOCK take the 128-bit operand as two XLEN halves (lo=rs1, hi=rs2);
-// RD's rs1 selects the limb (0..4). RV64 only.
+// RD's rs1 selects the limb (0..4). On RV64 SETR/BLOCK take the 128-bit operand
+// as two XLEN halves (lo=rs1, hi=rs2). On RV32 that operand does not fit in two
+// registers, so SETR instead stages one word (value=rs1, index=rs2) and funct3=4
+// (SETRB) commits the staged value into r; BLOCK then takes no register operands.
 #ifdef XLEN_64
 static inline void __intrin_poly1305_setr(uint64_t lo, uint64_t hi) {
     __asm__ volatile (".insn r 0x0b, 0, 0x05, x0, %0, %1" :: "r"(lo), "r"(hi));
@@ -352,6 +354,37 @@ static inline void __intrin_poly1305_block(uint64_t lo, uint64_t hi) {
 
 static inline uint64_t __intrin_poly1305_rd(uint32_t limb) {
     uint64_t rd;
+    __asm__ volatile (".insn r 0x0b, 2, 0x05, %0, %1, x0" : "=r"(rd) : "r"(limb));
+    return rd;
+}
+#else
+// On RV32 two source registers hold only 64 bits, so the 128-bit operand is
+// staged a word at a time (value in rs1, word index in rs2) and then consumed:
+// funct3=4 (SETRB) commits it into r, funct3=3 (BLOCK) absorbs it. Same wrapper
+// trick as GHASH above, so callers keep the single 128-bit-as-two-halves API.
+static inline void __intrin_poly1305_wr_u32(uint32_t value, uint32_t word) {
+    __asm__ volatile (".insn r 0x0b, 0, 0x05, x0, %0, %1" :: "r"(value), "r"(word));
+}
+
+static inline void __intrin_poly1305_stage(uint64_t lo, uint64_t hi) {
+    __intrin_poly1305_wr_u32((uint32_t)lo, 0);
+    __intrin_poly1305_wr_u32((uint32_t)(lo >> 32), 1);
+    __intrin_poly1305_wr_u32((uint32_t)hi, 2);
+    __intrin_poly1305_wr_u32((uint32_t)(hi >> 32), 3);
+}
+
+static inline void __intrin_poly1305_setr(uint64_t lo, uint64_t hi) {
+    __intrin_poly1305_stage(lo, hi);
+    __asm__ volatile (".insn r 0x0b, 4, 0x05, x0, x0, x0");
+}
+
+static inline void __intrin_poly1305_block(uint64_t lo, uint64_t hi) {
+    __intrin_poly1305_stage(lo, hi);
+    __asm__ volatile (".insn r 0x0b, 3, 0x05, x0, x0, x0");
+}
+
+static inline uint32_t __intrin_poly1305_rd(uint32_t limb) {
+    uint32_t rd;
     __asm__ volatile (".insn r 0x0b, 2, 0x05, %0, %1, x0" : "=r"(rd) : "r"(limb));
     return rd;
 }

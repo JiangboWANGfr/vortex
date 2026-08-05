@@ -223,6 +223,9 @@ package VX_trace_pkg;
                         INST_CRYPTO_POLY_SETR:  `TRACE(level, ("POLY1305.SETR"))
                         INST_CRYPTO_POLY_BLOCK: `TRACE(level, ("POLY1305.BLOCK"))
                         INST_CRYPTO_POLY_RD:    `TRACE(level, ("POLY1305.RD"))
+                    `ifndef XLEN_64
+                        INST_CRYPTO_POLY_SETRB: `TRACE(level, ("POLY1305.SETRB"))
+                    `endif
                         default:                `TRACE(level, ("?"))
                     endcase
                 end

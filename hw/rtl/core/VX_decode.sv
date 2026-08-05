@@ -658,7 +658,11 @@ module VX_decode import VX_gpu_pkg::*; #(
                         op_args.crypto.byte_select = '0;
                         op_args.crypto.round_imm = '0;
                         case (funct3)
-                            3'h0: begin // SETR: r = {rs2,rs1}
+                            // RV64 packs the 128-bit operand into {rs2,rs1}. RV32
+                            // stages it a word at a time: SETR writes opbuf[rs2[1:0]]
+                            // = rs1, then SETRB (funct3=4) commits it into r and
+                            // BLOCK consumes it with no register operands.
+                            3'h0: begin // SETR: RV64 r={rs2,rs1}; RV32 opbuf[rs2[1:0]]=rs1
                                 op_type = INST_OP_BITS'(INST_CRYPTO_POLY_SETR);
                                 `USED_IREG (rs1);
                                 `USED_IREG (rs2);
@@ -668,11 +672,18 @@ module VX_decode import VX_gpu_pkg::*; #(
                                 `USED_IREG (rd);
                                 `USED_IREG (rs1);
                             end
-                            3'h3: begin // BLOCK: acc = (acc + {rs2,rs1} + 2^128) * r mod p
+                            3'h3: begin // BLOCK: acc = (acc + operand + 2^128) * r mod p
                                 op_type = INST_OP_BITS'(INST_CRYPTO_POLY_BLOCK);
+                            `ifdef XLEN_64
                                 `USED_IREG (rs1);
                                 `USED_IREG (rs2);
+                            `endif
                             end
+                        `ifndef XLEN_64
+                            3'h4: begin // SETRB: r = clamp(opbuf); acc = 0
+                                op_type = INST_OP_BITS'(INST_CRYPTO_POLY_SETRB);
+                            end
+                        `endif
                             default: begin
                                 ex_type = 'x;
                                 op_type = 'x;

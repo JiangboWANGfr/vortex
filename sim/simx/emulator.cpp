@@ -82,7 +82,7 @@ Emulator::Emulator(const Arch &arch, const DCRS &dcrs, Core* core)
     , ghash_state_(arch.num_warps(),
                    std::vector<std::array<unsigned __int128, 2>>(arch.num_threads()))
     , poly1305_state_(arch.num_warps(),
-                   std::vector<std::array<uint64_t, 15>>(arch.num_threads()))
+                   std::vector<std::array<uint64_t, 17>>(arch.num_threads()))
     , chacha_state_(arch.num_warps(),
                    std::vector<std::array<uint32_t, 16>>(arch.num_threads()))
     , ipdom_size_(arch.num_threads()-1)

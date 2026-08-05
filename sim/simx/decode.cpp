@@ -235,6 +235,7 @@ static op_string_t op_string(const Instr &instr) {
       case PolyType::SETR:  return {"POLY_SETR", ""};
       case PolyType::BLOCK: return {"POLY_BLOCK", ""};
       case PolyType::RD:    return {"POLY_RD", ""};
+      case PolyType::SETRB: return {"POLY_SETRB", ""};
       default:
         std::abort();
       }
@@ -1313,11 +1314,18 @@ decode_integer_alu:
         instr->setDestReg(rd, RegType::Integer);
         instr->setSrcReg(0, rs1, RegType::Integer);
         break;
-      case 3: // BLOCK: acc = (acc + {rs2,rs1} + 2^128) * r mod p
+      case 3: // BLOCK: acc = (acc + operand + 2^128) * r mod p
         instr->setOpType(PolyType::BLOCK);
+      #ifdef XLEN_64
         instr->setSrcReg(0, rs1, RegType::Integer);
         instr->setSrcReg(1, rs2, RegType::Integer);
+      #endif
         break;
+    #ifndef XLEN_64
+      case 4: // SETRB: r = clamp(opbuf); acc = 0  (RV32 only)
+        instr->setOpType(PolyType::SETRB);
+        break;
+    #endif
       default:
         std::abort();
       }

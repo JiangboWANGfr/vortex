@@ -165,6 +165,7 @@ void AluUnit::tick() {
 				auto poly_type = std::get<PolyType>(trace->op_type);
 				switch (poly_type) {
 				case PolyType::SETR:
+				case PolyType::SETRB:
 				case PolyType::RD:
 					delay = 2;
 					break;

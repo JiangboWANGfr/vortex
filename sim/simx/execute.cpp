@@ -1162,19 +1162,43 @@ instr_trace_t* Emulator::execute(const Instr &instr, uint32_t wid) {
         uint64_t* r   = &poly_warp.at(t)[0];
         uint64_t* s   = &poly_warp.at(t)[5];
         uint64_t* acc = &poly_warp.at(t)[10];
+        // The 128-bit SETR/BLOCK operand: RV64 packs it into {rs2,rs1}; RV32 has
+        // only 64 bits of source register, so SETR stages it a word at a time into
+        // buf and SETRB/BLOCK consume that instead. Mirrors VX_crypto_poly1305.sv.
+        // NOTE: rs2_data is only populated for instructions that declare a second
+        // source register, so it must not be touched outside those cases.
+      #if (XLEN == 32)
+        uint64_t* buf = &poly_warp.at(t)[15];
+      #endif
         switch (poly_type) {
+      #if (XLEN == 32)
+        case PolyType::SETR: { // stage one 32-bit word: buf[rs2[1:0]] = rs1
+          uint32_t w = rs2_data[t].u32 & 0x3;
+          uint64_t d = (uint64_t)(uint32_t)rs1_data[t].u;
+          uint64_t& half = buf[w >> 1];
+          uint32_t sh = 32 * (w & 1);
+          half = (half & ~((uint64_t)0xffffffffull << sh)) | (d << sh);
+        } break;
+        case PolyType::SETRB: {
+          unsigned __int128 opnd = ((unsigned __int128)buf[1] << 64) | buf[0];
+      #else
         case PolyType::SETR: {
-          unsigned __int128 v = ((unsigned __int128)(uint64_t)rs2_data[t].u << 64)
-                              | (uint64_t)rs1_data[t].u;
+          unsigned __int128 opnd = ((unsigned __int128)(uint64_t)rs2_data[t].u << 64)
+                                 | (uint64_t)rs1_data[t].u;
+      #endif
           for (int k = 0; k < 5; ++k) {
-            r[k] = (uint64_t)((v >> (26 * k)) & 0x3ffffff);
+            r[k] = (uint64_t)((opnd >> (26 * k)) & 0x3ffffff);
             s[k] = r[k] * 5;
             acc[k] = 0;
           }
         } break;
         case PolyType::BLOCK: {
+      #if (XLEN == 32)
+          unsigned __int128 b = ((unsigned __int128)buf[1] << 64) | buf[0];
+      #else
           unsigned __int128 b = ((unsigned __int128)(uint64_t)rs2_data[t].u << 64)
                               | (uint64_t)rs1_data[t].u;
+      #endif
           uint64_t h0 = acc[0] + (uint64_t)((b >> 0)   & 0x3ffffff);
           uint64_t h1 = acc[1] + (uint64_t)((b >> 26)  & 0x3ffffff);
           uint64_t h2 = acc[2] + (uint64_t)((b >> 52)  & 0x3ffffff);

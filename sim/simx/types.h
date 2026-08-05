@@ -416,7 +416,8 @@ inline std::ostream &operator<<(std::ostream &os, const GhashType& type) {
 enum class PolyType {
   SETR,
   BLOCK,
-  RD
+  RD,
+  SETRB   // RV32 only: commit the staged 128-bit operand into r
 };
 
 struct IntrPolyArgs {
@@ -427,6 +428,7 @@ inline std::ostream &operator<<(std::ostream &os, const PolyType& type) {
   case PolyType::SETR:  os << "POLY_SETR"; break;
   case PolyType::BLOCK: os << "POLY_BLOCK"; break;
   case PolyType::RD:    os << "POLY_RD"; break;
+  case PolyType::SETRB: os << "POLY_SETRB"; break;
   default:
     assert(false);
   }
