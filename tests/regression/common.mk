@@ -139,7 +139,18 @@ $(PROJECT): $(SRCS)
 run-simx: $(PROJECT) kernel.vxbin
 	LD_LIBRARY_PATH=$(VORTEX_RT_PATH):$(LD_LIBRARY_PATH) VORTEX_DRIVER=simx ./$(PROJECT) $(OPTS)
 
-run-rtlsim: $(PROJECT) kernel.vxbin
+# CONFIGS selects which hardware extensions the RTL instantiates, so the rtlsim
+# driver has to be built with the same set the kernel was compiled against.
+# Without this the test loads whatever librtlsim.so happens to be lying around:
+# an instruction whose unit is absent falls through VX_decode's default arm and
+# executes as an unrelated ALU op, so the test reports wrong results instead of
+# failing to build. sim/rtlsim/Makefile keeps a stamp of its verilator flags, so
+# this is a no-op unless CONFIGS actually changed.
+.PHONY: driver-rtlsim
+driver-rtlsim:
+	$(MAKE) -C $(VORTEX_RT_PATH)/rtlsim CONFIGS='$(CONFIGS)'
+
+run-rtlsim: $(PROJECT) kernel.vxbin driver-rtlsim
 	LD_LIBRARY_PATH=$(VORTEX_RT_PATH):$(LD_LIBRARY_PATH) VORTEX_DRIVER=rtlsim ./$(PROJECT) $(OPTS)
 
 run-opae: $(PROJECT) kernel.vxbin
