@@ -358,7 +358,9 @@ static inline uint64_t __intrin_poly1305_rd(uint32_t limb) {
 // ChaCha20 stream-cipher PE: custom-0 opcode (0x0b), funct7 = 0x06.
 //   funct3: 0=WR (state[rs2[3:0]]=rs1), 1=BLOCK (permute+feedforward), 2=RD.
 // Words are 32-bit; byte order and the counter stay in software. RV32/RV64.
-static inline void __intrin_chacha_wr(uint32_t word_idx, uint32_t data) {
+// Argument order matches the other state-write intrinsics (value first, index
+// second): __intrin_keccak_write_lane, __intrin_ghash_seth, __intrin_ghash_xor.
+static inline void __intrin_chacha_wr(uint32_t data, uint32_t word_idx) {
     __asm__ volatile (".insn r 0x0b, 0, 0x06, x0, %0, %1" :: "r"(data), "r"(word_idx));
 }
 
@@ -396,6 +398,11 @@ static inline uint32_t __intrin_sha256sum1(uint32_t rs1) {
     return rd;
 }
 
+// RV32 Zkn byte-granular AES. On RV64 these same funct7 values are the aes64*
+// encodings (0x19/0x1b/0x1d/0x1f = aes64es/esm/ds/dsm, 0x3f = aes64ks2), so the
+// aes32 form must not be reachable there -- use the XLEN-dispatching composite
+// helpers (__intrin_aes_subword, __intrin_aes_*_round) instead.
+#ifndef XLEN_64
 static inline uint32_t __intrin_aes32esi(uint32_t acc, uint32_t word, uint32_t byte_select) {
     switch (byte_select & 0x3) {
     case 0:
@@ -467,6 +474,7 @@ static inline uint32_t __intrin_aes32dsmi(uint32_t acc, uint32_t word, uint32_t 
     }
     return acc;
 }
+#endif // !XLEN_64
 
 #ifdef XLEN_64
 static inline uint64_t __intrin_aes64es(uint64_t rs1, uint64_t rs2) {

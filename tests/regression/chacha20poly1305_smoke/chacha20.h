@@ -115,7 +115,7 @@ static inline void chacha20_block(const uint8_t key[32], uint32_t counter,
   //   RD    x16: 读回 PE 算好的 64 字节密钥流字
   // PE 返回的是已经做完 feedforward 的密钥流字, 字节序(小端打包)仍留在软件。
   for (int i = 0; i < 16; ++i)
-    __intrin_chacha_wr((uint32_t)i, st[i]);
+    __intrin_chacha_wr(st[i], (uint32_t)i);
   __intrin_chacha_block();
   for (int i = 0; i < 16; ++i)
     cc20_st32(out + 4 * i, __intrin_chacha_rd((uint32_t)i));

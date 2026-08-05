@@ -93,6 +93,11 @@ static uint32_t aes32dsi_ref(uint32_t acc, uint32_t word, uint32_t byte_select, 
 }
 
 static int check_scalar_ops() {
+#ifdef XLEN_64
+  // aes32* is an RV32-only encoding; on RV64 the same funct7 values decode as
+  // aes64es/esm/ds/dsm (and aes64ks2), so there is nothing to check here.
+  return 0;
+#else
   int errors = 0;
   const uint32_t acc = 0x11223344;
   const uint32_t word = 0xa1b2c3d4;
@@ -116,6 +121,7 @@ static int check_scalar_ops() {
   }
 
   return errors;
+#endif
 }
 
 static int check_round_helpers() {
