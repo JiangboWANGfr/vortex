@@ -80,6 +80,8 @@ module VX_crypto_keccak import VX_gpu_pkg::*; #(
     assign lane_data_wr  = execute_if.data.rs1_data[0];
     assign lane_data_xor = execute_if.data.rs1_data[0];
     assign read_data_out = lane_data_out;
+    // 只有 RV32 的半字合并路径要读回当前 lane 值; RV64 整字覆写, 用不到。
+    `UNUSED_VAR (lane_data_cur)
 `else
     wire write_hi_word = execute_if.data.rs2_data[0][5];
     wire read_hi_word  = execute_if.data.rs1_data[0][5];

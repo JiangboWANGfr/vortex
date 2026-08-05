@@ -41,6 +41,10 @@ module VX_crypto_unit import VX_gpu_pkg::*; #(
 `else
     localparam STATE_LANES  = NUM_LANES;
 `endif
+    // Only consumed to parameterize the AES/GHASH/Poly1305/ChaCha PEs below, so it
+    // has no remaining reference here once those are compiled out (or after elaboration
+    // substitutes it into the children).
+    `UNUSED_PARAM (STATE_LANES)
     localparam PARTIAL_BW   = (BLOCK_SIZE != `ISSUE_WIDTH) || (NUM_LANES != `SIMD_WIDTH);
     localparam ACTIVE_PE_COUNT = `EXT_AES_ENABLED + `EXT_SHA256_ENABLED + `EXT_KECCAK_ENABLED + `EXT_GHASH_ENABLED + `EXT_POLY1305_ENABLED + `EXT_CHACHA_ENABLED;
     localparam PE_COUNT     = `UP(ACTIVE_PE_COUNT);
