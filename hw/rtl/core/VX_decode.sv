@@ -663,15 +663,15 @@ module VX_decode import VX_gpu_pkg::*; #(
                                 `USED_IREG (rs1);
                                 `USED_IREG (rs2);
                             end
-                            3'h1: begin // BLOCK: acc = (acc + {rs2,rs1} + 2^128) * r mod p
-                                op_type = INST_OP_BITS'(INST_CRYPTO_POLY_BLOCK);
-                                `USED_IREG (rs1);
-                                `USED_IREG (rs2);
-                            end
                             3'h2: begin // RD: rd = acc_limb[rs1]
                                 op_type = INST_OP_BITS'(INST_CRYPTO_POLY_RD);
                                 `USED_IREG (rd);
                                 `USED_IREG (rs1);
+                            end
+                            3'h3: begin // BLOCK: acc = (acc + {rs2,rs1} + 2^128) * r mod p
+                                op_type = INST_OP_BITS'(INST_CRYPTO_POLY_BLOCK);
+                                `USED_IREG (rs1);
+                                `USED_IREG (rs2);
                             end
                             default: begin
                                 ex_type = 'x;
@@ -693,13 +693,13 @@ module VX_decode import VX_gpu_pkg::*; #(
                                 `USED_IREG (rs1);
                                 `USED_IREG (rs2);
                             end
-                            3'h1: begin // BLOCK: permute + feedforward
-                                op_type = INST_OP_BITS'(INST_CRYPTO_CHACHA_BLOCK);
-                            end
                             3'h2: begin // RD: rd = state[rs1[3:0]]
                                 op_type = INST_OP_BITS'(INST_CRYPTO_CHACHA_RD);
                                 `USED_IREG (rd);
                                 `USED_IREG (rs1);
+                            end
+                            3'h3: begin // BLOCK: permute + feedforward
+                                op_type = INST_OP_BITS'(INST_CRYPTO_CHACHA_BLOCK);
                             end
                             default: begin
                                 ex_type = 'x;

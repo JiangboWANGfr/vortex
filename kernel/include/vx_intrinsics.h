@@ -335,8 +335,10 @@ static inline void __intrin_ghash_mul(void) {
 #endif
 
 // Poly1305 one-time-MAC PE: custom-0 opcode (0x0b), funct7 = 0x05.
-//   funct3: 0=SETR (r={rs2,rs1}, clamped), 1=BLOCK (acc=(acc+{rs2,rs1}+2^128)*r),
-//           2=RD (rd=acc_limb[rs1]).
+//   funct3: 0=SETR (r={rs2,rs1}, clamped), 2=RD (rd=acc_limb[rs1]),
+//           3=BLOCK (acc=(acc+{rs2,rs1}+2^128)*r).
+// funct3 follows the class-wide convention: 0=write state, 1=accumulate-xor
+// (unused here), 2=read state, 3=run the multi-cycle primitive.
 // SETR/BLOCK take the 128-bit operand as two XLEN halves (lo=rs1, hi=rs2);
 // RD's rs1 selects the limb (0..4). RV64 only.
 #ifdef XLEN_64
@@ -345,7 +347,7 @@ static inline void __intrin_poly1305_setr(uint64_t lo, uint64_t hi) {
 }
 
 static inline void __intrin_poly1305_block(uint64_t lo, uint64_t hi) {
-    __asm__ volatile (".insn r 0x0b, 1, 0x05, x0, %0, %1" :: "r"(lo), "r"(hi));
+    __asm__ volatile (".insn r 0x0b, 3, 0x05, x0, %0, %1" :: "r"(lo), "r"(hi));
 }
 
 static inline uint64_t __intrin_poly1305_rd(uint32_t limb) {
@@ -356,7 +358,9 @@ static inline uint64_t __intrin_poly1305_rd(uint32_t limb) {
 #endif
 
 // ChaCha20 stream-cipher PE: custom-0 opcode (0x0b), funct7 = 0x06.
-//   funct3: 0=WR (state[rs2[3:0]]=rs1), 1=BLOCK (permute+feedforward), 2=RD.
+//   funct3: 0=WR (state[rs2[3:0]]=rs1), 2=RD, 3=BLOCK (permute+feedforward).
+// funct3 follows the class-wide convention: 0=write state, 1=accumulate-xor
+// (unused here), 2=read state, 3=run the multi-cycle primitive.
 // Words are 32-bit; byte order and the counter stay in software. RV32/RV64.
 // Argument order matches the other state-write intrinsics (value first, index
 // second): __intrin_keccak_write_lane, __intrin_ghash_seth, __intrin_ghash_xor.
@@ -365,7 +369,7 @@ static inline void __intrin_chacha_wr(uint32_t data, uint32_t word_idx) {
 }
 
 static inline void __intrin_chacha_block(void) {
-    __asm__ volatile (".insn r 0x0b, 1, 0x06, x0, x0, x0");
+    __asm__ volatile (".insn r 0x0b, 3, 0x06, x0, x0, x0");
 }
 
 static inline uint32_t __intrin_chacha_rd(uint32_t word_idx) {

@@ -1308,15 +1308,15 @@ decode_integer_alu:
         instr->setSrcReg(0, rs1, RegType::Integer);
         instr->setSrcReg(1, rs2, RegType::Integer);
         break;
-      case 1: // BLOCK: acc = (acc + {rs2,rs1} + 2^128) * r mod p
-        instr->setOpType(PolyType::BLOCK);
-        instr->setSrcReg(0, rs1, RegType::Integer);
-        instr->setSrcReg(1, rs2, RegType::Integer);
-        break;
       case 2: // RD: rd = acc_limb[rs1]
         instr->setOpType(PolyType::RD);
         instr->setDestReg(rd, RegType::Integer);
         instr->setSrcReg(0, rs1, RegType::Integer);
+        break;
+      case 3: // BLOCK: acc = (acc + {rs2,rs1} + 2^128) * r mod p
+        instr->setOpType(PolyType::BLOCK);
+        instr->setSrcReg(0, rs1, RegType::Integer);
+        instr->setSrcReg(1, rs2, RegType::Integer);
         break;
       default:
         std::abort();
@@ -1332,13 +1332,13 @@ decode_integer_alu:
         instr->setSrcReg(0, rs1, RegType::Integer);
         instr->setSrcReg(1, rs2, RegType::Integer);
         break;
-      case 1: // BLOCK: permute + feedforward
-        instr->setOpType(ChaChaType::BLOCK);
-        break;
       case 2: // RD: rd = state[rs1[3:0]]
         instr->setOpType(ChaChaType::RD);
         instr->setDestReg(rd, RegType::Integer);
         instr->setSrcReg(0, rs1, RegType::Integer);
+        break;
+      case 3: // BLOCK: permute + feedforward
+        instr->setOpType(ChaChaType::BLOCK);
         break;
       default:
         std::abort();
