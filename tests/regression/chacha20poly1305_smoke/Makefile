@@ -34,6 +34,12 @@ endif
 # Pure software ChaCha20-Poly1305 reference (no crypto PE). Match the prebuilt
 # libvortex.a float ABI (rv64ima, lp64 soft-float).
 EXT_F_DISABLE := 1
+ifeq ($(XLEN),32)
+# On RV32 the prebuilt libc32 is ilp32f and will not link against the ilp32
+# objects this produces; common.mk only drops libc (-lgcc alone) when BOTH
+# disable flags are set.
+EXT_D_DISABLE := 1
+endif
 
 VX_USE_GCC := 1
 

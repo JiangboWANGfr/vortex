@@ -47,6 +47,12 @@ endif
 
 # Match the float ABI of the prebuilt libvortex.a (rv64ima, lp64 soft-float).
 EXT_F_DISABLE := 1
+ifeq ($(XLEN),32)
+# On RV32 the prebuilt libc32 is ilp32f and will not link against the ilp32
+# objects this produces; common.mk only drops libc (-lgcc alone) when BOTH
+# disable flags are set.
+EXT_D_DISABLE := 1
+endif
 
 VX_USE_GCC := 1
 
