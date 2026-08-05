@@ -309,8 +309,14 @@ main() {
     set_default_startup_addr
     source_toolchain_env
 
-    if [[ -z "$RESULTS" && "$MODE" == "radix" ]]; then
-        RESULTS="$OUTPUT_ROOT/$RUNNER_NAME/results/$DRIVER/design_space.tsv"
+    # Every design-space mode needs its own default file. results/<driver>/results.tsv
+    # is the AEAD overhead table that tools/paper_results.py reads
+    # (build_chacha_aead_overhead prefers rtlsim), so a sweep must never land there.
+    if [[ -z "$RESULTS" ]]; then
+        case "$MODE" in
+            radix)      RESULTS="$OUTPUT_ROOT/$RUNNER_NAME/results/$DRIVER/design_space.tsv" ;;
+            poly-radix) RESULTS="$OUTPUT_ROOT/$RUNNER_NAME/results/$DRIVER/poly_design_space.tsv" ;;
+        esac
     fi
     init_single_driver_output
 

@@ -198,6 +198,23 @@ main() {
     done
     for dispatch in "${DISPATCHES[@]}"; do validate_dispatch "$dispatch"; done
 
+    local sweeping_hw=0
+    [[ "$sbox_radix_list"   != "default" ]] && sweeping_hw=1
+    [[ "$state_lanes_list"  != "default" ]] && sweeping_hw=1
+    if [[ "$sweeping_hw" -eq 1 ]]; then
+        [[ "$need_native" -eq 1 ]] || die "--sbox-radix/--state-lanes require NATIVE in --accel-modes"
+        if [[ "$DRIVER" != "rtlsim" ]]; then
+            echo "WARNING: driver=$DRIVER cannot observe a datapath latency knob --"
+            echo "         simx models no per-op FU result latency, so its cycle counts"
+            echo "         will not move. Use --driver=rtlsim for the latency result;"
+            echo "         this run only checks that the checksum stays bit-exact."
+        fi
+        # A knob sweep emits a different schema (it gains hw_config) and must not
+        # overwrite results/<driver>/results.tsv, which tools/paper_results.py reads
+        # as the GCM overhead table.
+        [[ -z "$RESULTS" ]] && RESULTS="$OUTPUT_ROOT/$RUNNER_NAME/results/$DRIVER/hw_design_space.tsv"
+    fi
+
     load_xlen
     set_default_startup_addr
     source_toolchain_env
@@ -211,19 +228,6 @@ main() {
     echo "DISPATCHES=${DISPATCHES[*]}"
     echo "TASKS=$TASKS BYTES=$BYTES"
     echo "RESULTS=$RESULTS"
-
-    local sweeping_hw=0
-    [[ "$sbox_radix_list"   != "default" ]] && sweeping_hw=1
-    [[ "$state_lanes_list"  != "default" ]] && sweeping_hw=1
-    if [[ "$sweeping_hw" -eq 1 ]]; then
-        [[ "$need_native" -eq 1 ]] || die "--sbox-radix/--state-lanes require NATIVE in --accel-modes"
-        if [[ "$DRIVER" != "rtlsim" ]]; then
-            echo "WARNING: driver=$DRIVER cannot observe a datapath latency knob --"
-            echo "         simx models no per-op FU result latency, so its cycle counts"
-            echo "         will not move. Use --driver=rtlsim for the latency result;"
-            echo "         this run only checks that the checksum stays bit-exact."
-        fi
-    fi
 
     run_cmd make -C "$ROOT_DIR/hw" config
     build_kernel
