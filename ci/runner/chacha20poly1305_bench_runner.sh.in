@@ -102,7 +102,7 @@ ratio_x() { [[ -z "${1:-}" || -z "${2:-}" || "$2" == "0" ]] && { printf ''; retu
 ratio_f() { [[ -z "${1:-}" || -z "${2:-}" || "$2" == "0" ]] && { printf ''; return; }; perl -e 'printf("%.3f",$ARGV[0]/$ARGV[1])' "$1" "$2"; }
 
 run_overhead() {
-    local app_dir="$ROOT_DIR/tests/regression/chacha20poly1305_bench"
+    local app_dir="$ROOT_DIR/tests/crypto/chacha-poly/chacha20poly1305_bench"
     local need_native=0 mode dispatch bytes
     for mode in "${ACCEL_MODES[@]}"; do validate_accel_mode "$mode"; [[ "$mode" == "NATIVE" ]] && need_native=1; done
     for dispatch in "${DISPATCHES[@]}"; do validate_dispatch "$dispatch"; done
@@ -157,7 +157,7 @@ run_overhead() {
 
 run_radix() {
     [[ "$DRIVER" == "rtlsim" ]] || die "radix mode requires --driver=rtlsim (simx is insensitive to the FU latency)"
-    local app_dir="$ROOT_DIR/tests/regression/chacha20poly1305_bench"
+    local app_dir="$ROOT_DIR/tests/crypto/chacha-poly/chacha20poly1305_bench"
     local radix dispatch
     for radix in "${QR_RADICES[@]}"; do validate_radix "$radix"; done
     for dispatch in "${DISPATCHES[@]}"; do validate_dispatch "$dispatch"; done

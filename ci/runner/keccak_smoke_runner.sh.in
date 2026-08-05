@@ -158,7 +158,7 @@ main() {
 
     # Run each accel-mode/driver pair and append both aggregate and per-driver
     # rows so single-driver and whole-matrix views stay in sync.
-    local app_dir="$ROOT_DIR/tests/regression/keccak_smoke"
+    local app_dir="$ROOT_DIR/tests/crypto/keccak/keccak_smoke"
     local failures=0
     for mode in "${ACCEL_MODES[@]}"; do
         # KECCAK_ACCEL_MODE changes compile-time selection between native

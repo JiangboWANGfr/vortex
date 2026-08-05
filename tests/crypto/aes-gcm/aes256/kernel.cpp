@@ -1,0 +1,146 @@
+#include <stdint.h>
+#include <string.h>
+#include <vx_spawn.h>
+#include "common.h"
+#include "../../../kernel/aes256/aes256.h"
+
+namespace {
+
+constexpr uint32_t kNumBlocks = 4;
+
+enum class AesMode : uint32_t {
+  ECB_ENC,
+  ECB_DEC,
+  CBC_ENC,
+  CBC_DEC,
+  CTR_ENC,
+  CTR_DEC,
+};
+
+struct TaskArgs {
+  const uint8_t* input;
+  uint8_t* output;
+  const uint8_t* iv;
+  const uint32_t* round_keys;
+  uint32_t nblocks_per_task;
+  AesMode mode;
+};
+
+alignas(4) const uint8_t kKey[KEY_SIZE] = {
+  0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe,
+  0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
+  0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7,
+  0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4,
+};
+
+alignas(4) const uint8_t kIV[BLOCK_SIZE] = {
+  0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7,
+  0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
+};
+
+alignas(4) const uint8_t kPlaintext[kNumBlocks * BLOCK_SIZE] = {
+  0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96, 0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+  0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c, 0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51,
+  0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11, 0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
+  0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17, 0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10,
+};
+
+alignas(4) const uint8_t kEcbCipher[kNumBlocks * BLOCK_SIZE] = {
+  0xf3, 0xee, 0xd1, 0xbd, 0xb5, 0xd2, 0xa0, 0x3c, 0x06, 0x4b, 0x5a, 0x7e, 0x3d, 0xb1, 0x81, 0xf8,
+  0x59, 0x1c, 0xcb, 0x10, 0xd4, 0x10, 0xed, 0x26, 0xdc, 0x5b, 0xa7, 0x4a, 0x31, 0x36, 0x28, 0x70,
+  0xb6, 0xed, 0x21, 0xb9, 0x9c, 0xa6, 0xf4, 0xf9, 0xf1, 0x53, 0xe7, 0xb1, 0xbe, 0xaf, 0xed, 0x1d,
+  0x23, 0x30, 0x4b, 0x7a, 0x39, 0xf9, 0xf3, 0xff, 0x06, 0x7d, 0x8d, 0x8f, 0x9e, 0x24, 0xec, 0xc7,
+};
+
+alignas(4) const uint8_t kCbcCipher[kNumBlocks * BLOCK_SIZE] = {
+  0xb8, 0xcf, 0x17, 0x12, 0xb0, 0x0a, 0x3b, 0x8d, 0x5d, 0x98, 0x76, 0xce, 0x61, 0x9d, 0x2f, 0xbb,
+  0xa9, 0x89, 0xb2, 0x4a, 0x5d, 0x66, 0xfa, 0xe8, 0x9a, 0x53, 0x5d, 0xce, 0xfc, 0x22, 0xb4, 0x67,
+  0x00, 0x3a, 0xd1, 0x4f, 0x83, 0x68, 0xd9, 0x01, 0xe9, 0xa4, 0x7d, 0xe9, 0x33, 0x1b, 0x61, 0xaa,
+  0x4e, 0x35, 0xaa, 0x83, 0x5d, 0xdd, 0x5a, 0xe8, 0xd0, 0xd0, 0xba, 0x13, 0x2c, 0x21, 0x83, 0x3d,
+};
+
+alignas(4) const uint8_t kCtrCipher[kNumBlocks * BLOCK_SIZE] = {
+  0x60, 0x1e, 0xc3, 0x13, 0x77, 0x57, 0x89, 0xa5, 0xb7, 0xa7, 0xf5, 0x04, 0xbb, 0xf3, 0xd2, 0x28,
+  0xf4, 0x43, 0xe3, 0xca, 0x4d, 0x62, 0xb5, 0x9a, 0xca, 0x84, 0xe9, 0x90, 0xca, 0xca, 0xf5, 0xc5,
+  0x2b, 0x09, 0x30, 0xda, 0xa2, 0x3d, 0xe9, 0x4c, 0xe8, 0x70, 0x17, 0xba, 0x2d, 0x84, 0x98, 0x8d,
+  0xdf, 0xc9, 0xc5, 0x8d, 0xb6, 0x7a, 0xad, 0xa6, 0x13, 0xc2, 0xdd, 0x08, 0x45, 0x79, 0x41, 0xa6,
+};
+
+alignas(4) uint8_t g_output[kNumBlocks * BLOCK_SIZE];
+uint32_t g_round_keys[Nb * (Nr + 1)];
+
+void aes_worker(const TaskArgs* __UNIFORM__ args) {
+  uint32_t task_id = blockIdx.x;
+  uint32_t start_block_idx = task_id * args->nblocks_per_task;
+  uint32_t offset = start_block_idx * BLOCK_SIZE;
+
+  switch (args->mode) {
+  case AesMode::ECB_ENC:
+    aes256_ecb_enc(args->input + offset, args->round_keys, args->output + offset, args->nblocks_per_task);
+    break;
+  case AesMode::ECB_DEC:
+    aes256_ecb_dec(args->input + offset, args->round_keys, args->output + offset, args->nblocks_per_task);
+    break;
+  case AesMode::CBC_DEC: {
+    uintptr_t first_iv = reinterpret_cast<uintptr_t>(args->iv);
+    uintptr_t prev_delta = BLOCK_SIZE & (0u - static_cast<uintptr_t>(offset != 0));
+    uintptr_t prev_ct = reinterpret_cast<uintptr_t>(args->input) + offset - prev_delta;
+    uintptr_t use_iv_mask = 0u - static_cast<uintptr_t>(offset == 0);
+    uintptr_t iv_addr = prev_ct ^ ((prev_ct ^ first_iv) & use_iv_mask);
+    const uint8_t* iv = reinterpret_cast<const uint8_t*>(iv_addr);
+    aes256_cbc_dec(iv, args->input + offset, args->round_keys, args->output + offset, args->nblocks_per_task);
+    break;
+  }
+  case AesMode::CTR_ENC:
+  case AesMode::CTR_DEC:
+    aes256_ctr(args->iv, start_block_idx, args->input + offset, args->round_keys, args->output + offset, args->nblocks_per_task);
+    break;
+  case AesMode::CBC_ENC:
+    break;
+  }
+}
+
+int run_parallel_case(uint32_t fail_bit, AesMode mode, const uint8_t* input, const uint8_t* expected, aes256_status_t* status) {
+  memset(g_output, 0, sizeof(g_output));
+  int inv_mix_cols = (mode == AesMode::ECB_DEC || mode == AesMode::CBC_DEC);
+  aes256_key_exp(reinterpret_cast<const uint32_t*>(kKey), g_round_keys, inv_mix_cols);
+
+  TaskArgs args = {input, g_output, kIV, g_round_keys, 1, mode};
+  uint32_t tasks = kNumBlocks;
+  vx_spawn_threads(1, &tasks, nullptr, (vx_kernel_func_cb)aes_worker, &args);
+
+  if (memcmp(g_output, expected, sizeof(g_output)) != 0) {
+    status->failed_mask |= fail_bit;
+    return 1;
+  }
+  return 0;
+}
+
+int run_cbc_enc_case(aes256_status_t* status) {
+  memset(g_output, 0, sizeof(g_output));
+  aes256_key_exp(reinterpret_cast<const uint32_t*>(kKey), g_round_keys, 0);
+  aes256_cbc_enc(kIV, kPlaintext, g_round_keys, g_output, kNumBlocks);
+  if (memcmp(g_output, kCbcCipher, sizeof(g_output)) != 0) {
+    status->failed_mask |= AES256_FAIL_CBC_ENC;
+    return 1;
+  }
+  return 0;
+}
+
+} // namespace
+
+int main() {
+  kernel_arg_t* __UNIFORM__ arg = (kernel_arg_t*)csr_read(VX_CSR_MSCRATCH);
+  aes256_status_t* status = (aes256_status_t*)arg->status_addr;
+  status->errors = 0;
+  status->failed_mask = 0;
+
+  status->errors += run_parallel_case(AES256_FAIL_ECB_ENC, AesMode::ECB_ENC, kPlaintext, kEcbCipher, status);
+  status->errors += run_parallel_case(AES256_FAIL_ECB_DEC, AesMode::ECB_DEC, kEcbCipher, kPlaintext, status);
+  status->errors += run_cbc_enc_case(status);
+  status->errors += run_parallel_case(AES256_FAIL_CBC_DEC, AesMode::CBC_DEC, kCbcCipher, kPlaintext, status);
+  status->errors += run_parallel_case(AES256_FAIL_CTR_ENC, AesMode::CTR_ENC, kPlaintext, kCtrCipher, status);
+  status->errors += run_parallel_case(AES256_FAIL_CTR_DEC, AesMode::CTR_DEC, kCtrCipher, kPlaintext, status);
+
+  return 0;
+}

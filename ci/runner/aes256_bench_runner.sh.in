@@ -197,7 +197,7 @@ main() {
 
     # Run each accel-mode/op pair, collect logs, and defer TSV emission until
     # SOFTWARE baselines are known for cycles_speedup calculation.
-    local app_dir="$ROOT_DIR/tests/regression/aes256_bench"
+    local app_dir="$ROOT_DIR/tests/crypto/aes-gcm/aes256_bench"
     local failures=0
 
     # rows holds formatted result records in memory. We cannot write rows

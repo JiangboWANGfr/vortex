@@ -182,7 +182,7 @@ main() {
     build_kernel
     build_driver_runtime "$need_native"
 
-    local app_dir="$ROOT_DIR/tests/regression/gcm_bench"
+    local app_dir="$ROOT_DIR/tests/crypto/aes-gcm/gcm_bench"
     local failures=0
     local -a rows=()
     declare -A unprot_cycles=()

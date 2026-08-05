@@ -27,8 +27,8 @@ Accel modes:
              -DGHASH_NATIVE.
 
 Variants:
-  scalar : tests/regression/ghash_smoke      (one GHASH chain per warp)
-  simt   : tests/regression/ghash_simt_smoke  (vx_spawn_threads fan-out)
+  scalar : tests/crypto/aes-gcm/ghash_smoke      (one GHASH chain per warp)
+  simt   : tests/crypto/aes-gcm/ghash_simt_smoke  (vx_spawn_threads fan-out)
 
 NOTE: NATIVE + simt is skipped — the GHASH PE holds one {H,Y} state per
 warp, so independent per-lane chains would clobber each other. Per-lane
@@ -80,8 +80,8 @@ validate_variant() {
 
 variant_app_dir() {
     case "$1" in
-        scalar) echo "$ROOT_DIR/tests/regression/ghash_smoke" ;;
-        simt)   echo "$ROOT_DIR/tests/regression/ghash_simt_smoke" ;;
+        scalar) echo "$ROOT_DIR/tests/crypto/aes-gcm/ghash_smoke" ;;
+        simt)   echo "$ROOT_DIR/tests/crypto/aes-gcm/ghash_simt_smoke" ;;
     esac
 }
 

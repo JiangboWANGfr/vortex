@@ -183,7 +183,7 @@ main() {
     run_cmd make -C "$ROOT_DIR/hw" config
     build_kernel
 
-    local app_dir="$ROOT_DIR/tests/regression/ghash_bench"
+    local app_dir="$ROOT_DIR/tests/crypto/aes-gcm/ghash_bench"
     local failures=0
 
     # Defer TSV emission until SOFTWARE baselines are known for cycles_speedup.
