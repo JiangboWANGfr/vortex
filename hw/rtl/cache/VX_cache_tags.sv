@@ -13,12 +13,11 @@
 
 `include "VX_cache_define.vh"
 
-// Single-array tag store with per-way write-enable.
+// Tag store with per-way write-enable.
 //
-// All NUM_WAYS tags for a set live in one block-RAM word (read in parallel for
-// the hit compare); a per-way write-enable updates a single way on a
-// fill/write/invalidate without a read-modify-write. This replaces the
-// previous NUM_WAYS separate tag arrays with one BRAM.
+// Most targets keep all NUM_WAYS tags for a set in one block-RAM word. Quartus
+// uses one RAM per way because Stratix 10 M20K byte enables cannot represent
+// the 21-bit way slices used by this configuration.
 
 module VX_cache_tags import VX_gpu_pkg::*; #(
     parameter CACHE_SIZE    = 1024,           // Size of cache in bytes
@@ -200,9 +199,34 @@ module VX_cache_tags import VX_gpu_pkg::*; #(
         assign line_present[i] = (line_tag == read_tag[i]) && (| read_valid[i]);
     end
 
-    // Single tag array: one BRAM word holds all ways' {valid[SEC], tag}; per-way
-    // write-enable updates a single way. Read at line_idx_n (one cycle ahead),
-    // written at line_idx, read-first to match the fill/replay ordering.
+    // Read at line_idx_n (one cycle ahead), write at line_idx, and use
+    // read-first behavior to match the fill/replay ordering.
+`ifdef QUARTUS
+    // Quartus 19.2 cannot map the unified 84-bit, four-way array to Stratix 10
+    // M20Ks because each write-enable would cover 21 bits. Whole-word writes
+    // to one RAM per way preserve the same cycle behavior without byte enables.
+    for (genvar i = 0; i < NUM_WAYS; ++i) begin : g_tag_store
+        VX_dp_ram #(
+            .DATAW    (TAG_ENTRYW),
+            .WRENW    (1),
+            .SIZE     (`CS_LINES_PER_BANK),
+            .OUT_REG  (1),
+            .RDW_MODE ("R")
+        ) tag_store (
+            .clk   (clk),
+            .reset (reset),
+            .read  (~stall),
+            .write (line_write[i]),
+            .wren  (1'b1),
+            .waddr (line_idx),
+            .raddr (line_idx_n),
+            .wdata (line_wdata[i]),
+            .rdata (tag_rdata[i])
+        );
+    end
+`else
+    // A unified word keeps all ways in one block RAM on targets that support
+    // arbitrary per-way write enables.
     VX_dp_ram #(
         .DATAW (NUM_WAYS * TAG_ENTRYW),
         .WRENW (NUM_WAYS),
@@ -220,6 +244,7 @@ module VX_cache_tags import VX_gpu_pkg::*; #(
         .wdata (line_wdata),
         .rdata (tag_rdata)
     );
+`endif
 
     // Decoupled per-sector dirty store (writeback only). Mirrors the tag store's
     // access pattern (look-ahead read, read-first) so pipeline alignment is

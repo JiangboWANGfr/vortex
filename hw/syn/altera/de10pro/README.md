@@ -18,8 +18,9 @@ The default profile is deliberately small for bring-up:
 - RV32, one cluster, one core
 - one warp and one thread/lane
 - F and D disabled
+- three-cycle I-cache and D-cache pipelines for the 250 MHz core clock
 - one platform-memory bank with interleaving disabled
-- 125 MHz platform clock
+- 250 MHz platform clock (`DUT.coreclkout_hip`)
 
 The Qsys connections are:
 
@@ -64,7 +65,7 @@ mkdir -p build32
 cd build32
 ../configure --xlen=32 \
   --tooldir=/home/jiangbowang/aphdcode/vortex_proj/toolchains
-DE10PRO_CONFIGS='-DVX_CFG_NUM_CLUSTERS=1 -DVX_CFG_NUM_CORES=1 -DVX_CFG_NUM_WARPS=1 -DVX_CFG_NUM_THREADS=1 -DVX_CFG_EXT_F_DISABLE=1 -DVX_CFG_EXT_D_DISABLE=1 -DVX_CFG_PLATFORM_MEMORY_NUM_BANKS=1 -DVX_CFG_PLATFORM_MEMORY_INTERLEAVE=0 -DVX_CFG_PLATFORM_CLOCK_RATE=125'
+DE10PRO_CONFIGS='-DVX_CFG_NUM_CLUSTERS=1 -DVX_CFG_NUM_CORES=1 -DVX_CFG_NUM_WARPS=1 -DVX_CFG_NUM_THREADS=1 -DVX_CFG_EXT_F_DISABLE=1 -DVX_CFG_EXT_D_DISABLE=1 -DVX_CFG_ICACHE_LATENCY=3 -DVX_CFG_DCACHE_LATENCY=3 -DVX_CFG_PLATFORM_MEMORY_NUM_BANKS=1 -DVX_CFG_PLATFORM_MEMORY_INTERLEAVE=0 -DVX_CFG_PLATFORM_CLOCK_RATE=250'
 make -C sw/runtime de10pro CONFIGS="$DE10PRO_CONFIGS"
 ```
 
