@@ -1,0 +1,83 @@
+package require -exact qsys 19.2
+
+set_module_property NAME vortex_shell
+set_module_property VERSION 1.0
+set_module_property DISPLAY_NAME "Vortex DE10-Pro shell"
+set_module_property DESCRIPTION "Vortex DE10-Pro shell"
+set_module_property GROUP "Vortex"
+set_module_property AUTHOR "Vortex"
+set_module_property INSTANTIATE_IN_SYSTEM_MODULE true
+set_module_property EDITABLE false
+
+add_fileset synth_fileset QUARTUS_SYNTH synth_callback
+set_fileset_property synth_fileset TOP_LEVEL vortex_shell
+proc synth_callback {entity_name} {
+    add_fileset_file vortex_shell.sv SYSTEM_VERILOG PATH {@VORTEX_SHELL@} TOP_LEVEL_FILE
+}
+
+add_parameter C_CTRL_ADDR_WIDTH INTEGER 20
+set_parameter_property C_CTRL_ADDR_WIDTH DISPLAY_NAME "Control address width"
+set_parameter_property C_CTRL_ADDR_WIDTH HDL_PARAMETER true
+
+add_parameter C_CTRL_DATA_WIDTH INTEGER 32
+set_parameter_property C_CTRL_DATA_WIDTH DISPLAY_NAME "Control data width"
+set_parameter_property C_CTRL_DATA_WIDTH HDL_PARAMETER true
+
+add_parameter C_MEM_ADDR_WIDTH INTEGER 33
+set_parameter_property C_MEM_ADDR_WIDTH DISPLAY_NAME "Memory address width"
+set_parameter_property C_MEM_ADDR_WIDTH HDL_PARAMETER true
+
+add_parameter C_MEM_DATA_WIDTH INTEGER 512
+set_parameter_property C_MEM_DATA_WIDTH DISPLAY_NAME "Memory data width"
+set_parameter_property C_MEM_DATA_WIDTH HDL_PARAMETER true
+
+add_parameter C_MEM_BURST_WIDTH INTEGER 5
+set_parameter_property C_MEM_BURST_WIDTH DISPLAY_NAME "Memory burst-count width"
+set_parameter_property C_MEM_BURST_WIDTH HDL_PARAMETER true
+
+add_interface clock clock end
+set_interface_property clock clockRate 0
+add_interface_port clock clk clk Input 1
+
+add_interface reset reset end
+set_interface_property reset associatedClock clock
+set_interface_property reset synchronousEdges DEASSERT
+add_interface_port reset reset reset Input 1
+
+add_interface ctrl avalon end
+set_interface_property ctrl addressUnits SYMBOLS
+set_interface_property ctrl associatedClock clock
+set_interface_property ctrl associatedReset reset
+set_interface_property ctrl bitsPerSymbol 8
+set_interface_property ctrl explicitAddressSpan 4096
+set_interface_property ctrl maximumPendingReadTransactions 1
+set_interface_property ctrl readLatency 0
+add_interface_port ctrl ctrl_address address Input C_CTRL_ADDR_WIDTH
+add_interface_port ctrl ctrl_byteenable byteenable Input C_CTRL_DATA_WIDTH/8
+add_interface_port ctrl ctrl_chipselect chipselect Input 1
+add_interface_port ctrl ctrl_read read Input 1
+add_interface_port ctrl ctrl_readdata readdata Output C_CTRL_DATA_WIDTH
+add_interface_port ctrl ctrl_readdatavalid readdatavalid Output 1
+add_interface_port ctrl ctrl_waitrequest waitrequest Output 1
+add_interface_port ctrl ctrl_write write Input 1
+add_interface_port ctrl ctrl_writedata writedata Input C_CTRL_DATA_WIDTH
+
+add_interface avalon_master avalon start
+set_interface_property avalon_master addressUnits SYMBOLS
+set_interface_property avalon_master associatedClock clock
+set_interface_property avalon_master associatedReset reset
+set_interface_property avalon_master bitsPerSymbol 8
+set_interface_property avalon_master burstOnBurstBoundariesOnly false
+set_interface_property avalon_master doStreamReads false
+set_interface_property avalon_master doStreamWrites false
+set_interface_property avalon_master linewrapBursts false
+set_interface_property avalon_master maximumPendingReadTransactions 16
+add_interface_port avalon_master vx_mem_address address Output C_MEM_ADDR_WIDTH
+add_interface_port avalon_master vx_mem_burstcount burstcount Output C_MEM_BURST_WIDTH
+add_interface_port avalon_master vx_mem_byteenable byteenable Output C_MEM_DATA_WIDTH/8
+add_interface_port avalon_master vx_mem_read read Output 1
+add_interface_port avalon_master vx_mem_readdata readdata Input C_MEM_DATA_WIDTH
+add_interface_port avalon_master vx_mem_readdatavalid readdatavalid Input 1
+add_interface_port avalon_master vx_mem_waitrequest waitrequest Input 1
+add_interface_port avalon_master vx_mem_write write Output 1
+add_interface_port avalon_master vx_mem_writedata writedata Output C_MEM_DATA_WIDTH

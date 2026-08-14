@@ -4,7 +4,7 @@
 // DE10-Pro transport backend with a software implementation of the Vortex
 // command processor. The common runtime writes its normal CP command ring in
 // host memory; committing Q_TAIL executes those commands synchronously through
-// the Terasic BAR and board-DDR DMA APIs.
+// the Intel Gen3x16 BAR and board-DDR DMA interfaces.
 
 #include <common.h>
 
@@ -97,8 +97,7 @@ void set_high_u32(uint64_t* dst, uint32_t value) {
 class vx_device {
 public:
   vx_device()
-      : bar_(VX_DE10PRO_DEFAULT_BAR),
-        mmio_base_(VX_DE10PRO_DEFAULT_MMIO_BASE),
+      : mmio_base_(VX_DE10PRO_DEFAULT_MMIO_BASE),
         staging_addr_(VX_DE10PRO_DEFAULT_STAGING),
         staging_size_(VX_DE10PRO_DEFAULT_CHUNK_SIZE),
         pcie_(nullptr) {}
@@ -108,10 +107,9 @@ public:
       if (env_u32("DE10PRO_VX_RESET_ON_CLOSE", 1) != 0)
         (void)mmio_write32(AFU_IMAGE_MMIO_CMD_TYPE,
                            AFU_IMAGE_CMD_RESET);
-      api_.PCIE_Close(pcie_);
+      drv_close(pcie_);
       pcie_ = nullptr;
     }
-    drv_close();
 
     std::lock_guard<std::mutex> guard(host_mutex_);
     for (const auto& region : host_regions_)
@@ -120,21 +118,11 @@ public:
   }
 
   int init() {
-    if (drv_init(&api_) != 0) {
-      std::fprintf(stderr, "[VXDRV] DE10-Pro driver load failed: %s\n",
-                   api_.get_last_error ? api_.get_last_error() : "unknown error");
-      return -1;
-    }
-
-    const uint16_t vendor_id = static_cast<uint16_t>(
-        env_u32("TERASIC_PCIE_VENDOR_ID", VX_DE10PRO_DEFAULT_VENDOR_ID));
-    const uint16_t device_id = static_cast<uint16_t>(
-        env_u32("TERASIC_PCIE_DEVICE_ID", VX_DE10PRO_DEFAULT_DEVICE_ID));
-    const uint16_t card_id = static_cast<uint16_t>(
-        env_u32("TERASIC_PCIE_CARD", 0));
-
-    bar_ = static_cast<pcie_bar_t>(
+    const uint32_t bdf = env_u32("DE10PRO_PCIE_BDF",
+                                 VX_DE10PRO_DEFAULT_BDF);
+    const pcie_bar_t bar = static_cast<pcie_bar_t>(
         env_u32("DE10PRO_VX_BAR", VX_DE10PRO_DEFAULT_BAR));
+
     mmio_base_ = env_u64("DE10PRO_VX_MMIO_BASE",
                          VX_DE10PRO_DEFAULT_MMIO_BASE);
     staging_addr_ = env_u64("DE10PRO_VX_STAGING_ADDR",
@@ -144,19 +132,17 @@ public:
                 VX_DE10PRO_DEFAULT_CHUNK_SIZE),
         kCacheLineBytes);
     if (staging_size_ < kCacheLineBytes
-     || staging_size_ > std::numeric_limits<uint32_t>::max()) {
+     || staging_size_ > VX_DE10PRO_MAX_DMA_SIZE) {
       std::fprintf(stderr,
                    "[VXDRV] invalid DE10PRO_VX_STAGING_SIZE: 0x%llx\n",
                    static_cast<unsigned long long>(staging_size_));
-      drv_close();
       return -1;
     }
 
-    pcie_ = api_.PCIE_Open(vendor_id, device_id, card_id);
+    pcie_ = drv_open(bdf, bar, static_cast<uint32_t>(staging_size_));
     if (pcie_ == nullptr) {
-      std::fprintf(stderr, "[VXDRV] PCIE_Open failed: %s\n",
+      std::fprintf(stderr, "[VXDRV] PCIe open failed: %s\n",
                    driver_error());
-      drv_close();
       return -1;
     }
 
@@ -301,11 +287,11 @@ public:
 
 private:
   const char* driver_error() const {
-    return api_.get_last_error ? api_.get_last_error() : "unknown error";
+    return drv_get_last_error();
   }
 
   int mmio_read32(uint64_t reg, uint32_t* value) const {
-    if (!api_.PCIE_Read32(pcie_, bar_, mmio_base_ + reg, value)) {
+    if (!drv_read32(pcie_, mmio_base_ + reg, value)) {
       std::fprintf(stderr,
                    "[VXDRV] PCIE_Read32(reg=0x%llx) failed: %s\n",
                    static_cast<unsigned long long>(reg), driver_error());
@@ -315,7 +301,7 @@ private:
   }
 
   int mmio_write32(uint64_t reg, uint32_t value) const {
-    if (!api_.PCIE_Write32(pcie_, bar_, mmio_base_ + reg, value)) {
+    if (!drv_write32(pcie_, mmio_base_ + reg, value)) {
       std::fprintf(stderr,
                    "[VXDRV] PCIE_Write32(reg=0x%llx, value=0x%x) failed: %s\n",
                    static_cast<unsigned long long>(reg), value,
@@ -371,7 +357,7 @@ private:
     const uint64_t local_addr = staging_addr_ + dev_addr;
     if (size > std::numeric_limits<uint64_t>::max() - local_addr)
       return -1;
-    if (!api_.PCIE_DmaRead(pcie_, local_addr, dst,
+    if (!drv_dma_read(pcie_, local_addr, dst,
                            static_cast<uint32_t>(size))) {
       std::fprintf(stderr,
                    "[VXDRV] PCIE_DmaRead(dev=0x%llx, size=0x%llx) failed: %s\n",
@@ -389,8 +375,7 @@ private:
     const uint64_t local_addr = staging_addr_ + dev_addr;
     if (size > std::numeric_limits<uint64_t>::max() - local_addr)
       return -1;
-    if (!api_.PCIE_DmaWrite(pcie_, local_addr,
-                            const_cast<void*>(src),
+    if (!drv_dma_write(pcie_, local_addr, src,
                             static_cast<uint32_t>(size))) {
       std::fprintf(stderr,
                    "[VXDRV] PCIE_DmaWrite(dev=0x%llx, size=0x%llx) failed: %s\n",
@@ -735,8 +720,6 @@ private:
     last_dcr_rsp_ = 0;
   }
 
-  de10pro_drv_api_t api_{};
-  pcie_bar_t bar_;
   uint64_t mmio_base_;
   uint64_t staging_addr_;
   uint64_t staging_size_;

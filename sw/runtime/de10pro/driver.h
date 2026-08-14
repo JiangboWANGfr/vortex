@@ -8,29 +8,22 @@
 using pcie_handle_t = void*;
 using pcie_address_t = uint64_t;
 using pcie_local_address_t = uint64_t;
-using pcie_bar_t = int;
+using pcie_bar_t = unsigned int;
 
-using pfn_PCIE_Open = pcie_handle_t (*)(uint16_t, uint16_t, uint16_t);
-using pfn_PCIE_Close = void (*)(pcie_handle_t);
-using pfn_PCIE_Read32 = bool (*)(pcie_handle_t, pcie_bar_t,
-                                 pcie_address_t, uint32_t*);
-using pfn_PCIE_Write32 = bool (*)(pcie_handle_t, pcie_bar_t,
-                                  pcie_address_t, uint32_t);
-using pfn_PCIE_DmaRead = bool (*)(pcie_handle_t, pcie_local_address_t,
-                                  void*, uint32_t);
-using pfn_PCIE_DmaWrite = bool (*)(pcie_handle_t, pcie_local_address_t,
-                                   void*, uint32_t);
+pcie_handle_t drv_open(uint32_t bdf, pcie_bar_t bar, uint32_t kmem_size);
 
-struct de10pro_drv_api_t {
-  pfn_PCIE_Open PCIE_Open;
-  pfn_PCIE_Close PCIE_Close;
-  pfn_PCIE_Read32 PCIE_Read32;
-  pfn_PCIE_Write32 PCIE_Write32;
-  pfn_PCIE_DmaRead PCIE_DmaRead;
-  pfn_PCIE_DmaWrite PCIE_DmaWrite;
-  const char* (*get_last_error)();
-};
+void drv_close(pcie_handle_t handle);
 
-int drv_init(de10pro_drv_api_t* drv_funcs);
+bool drv_read32(pcie_handle_t handle, pcie_address_t address,
+                uint32_t* value);
 
-void drv_close();
+bool drv_write32(pcie_handle_t handle, pcie_address_t address,
+                 uint32_t value);
+
+bool drv_dma_read(pcie_handle_t handle, pcie_local_address_t address,
+                  void* data, uint32_t size);
+
+bool drv_dma_write(pcie_handle_t handle, pcie_local_address_t address,
+                   const void* data, uint32_t size);
+
+const char* drv_get_last_error();

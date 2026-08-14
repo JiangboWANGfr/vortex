@@ -15,26 +15,26 @@
 `include "VX_define.vh"
 
 module de10pro_vortex_afu import VX_gpu_pkg::*; #(
-    parameter C_BAR_ADDR_WIDTH      = 64,
+    parameter C_BAR_ADDR_WIDTH      = 20,
     parameter C_BAR_DATA_WIDTH      = 32,
     parameter C_MEM_NUM_BANKS       = `VX_CFG_PLATFORM_MEMORY_NUM_BANKS,
     parameter C_MEM_DATA_WIDTH      = `VX_CFG_PLATFORM_MEMORY_DATA_SIZE * 8,
-    parameter C_MEM_ADDR_WIDTH      = `VX_CFG_PLATFORM_MEMORY_ADDR_WIDTH - `CLOG2(C_MEM_NUM_BANKS),
-    parameter C_MEM_BURST_WIDTH     = 1
+    parameter C_MEM_ADDR_WIDTH      = 33,
+    parameter C_MEM_BURST_WIDTH     = 5
 ) (
     `SCOPE_IO_DECL
 
     input  wire                             clk,
     input  wire                             reset,
 
-    input  wire                             rxm_bar4_read,
-    input  wire                             rxm_bar4_write,
-    input  wire [C_BAR_ADDR_WIDTH-1:0]      rxm_bar4_address,
-    input  wire [C_BAR_DATA_WIDTH-1:0]      rxm_bar4_writedata,
-    input  wire [C_BAR_DATA_WIDTH/8-1:0]    rxm_bar4_byteenable,
-    output wire [C_BAR_DATA_WIDTH-1:0]      rxm_bar4_readdata,
-    output wire                             rxm_bar4_readdatavalid,
-    output wire                             rxm_bar4_waitrequest,
+    input  wire                             ctrl_read,
+    input  wire                             ctrl_write,
+    input  wire [C_BAR_ADDR_WIDTH-1:0]      ctrl_address,
+    input  wire [C_BAR_DATA_WIDTH-1:0]      ctrl_writedata,
+    input  wire [C_BAR_DATA_WIDTH/8-1:0]    ctrl_byteenable,
+    output wire [C_BAR_DATA_WIDTH-1:0]      ctrl_readdata,
+    output wire                             ctrl_readdatavalid,
+    output wire                             ctrl_waitrequest,
 
     output wire [C_MEM_DATA_WIDTH-1:0]      avs_writedata [C_MEM_NUM_BANKS],
     input  wire [C_MEM_DATA_WIDTH-1:0]      avs_readdata [C_MEM_NUM_BANKS],
@@ -59,14 +59,14 @@ module de10pro_vortex_afu import VX_gpu_pkg::*; #(
 
         .clk                   (clk),
         .reset                 (reset),
-        .avs_ctrl_read         (rxm_bar4_read),
-        .avs_ctrl_write        (rxm_bar4_write),
-        .avs_ctrl_address      (rxm_bar4_address),
-        .avs_ctrl_writedata    (rxm_bar4_writedata),
-        .avs_ctrl_byteenable   (rxm_bar4_byteenable),
-        .avs_ctrl_readdata     (rxm_bar4_readdata),
-        .avs_ctrl_readdatavalid(rxm_bar4_readdatavalid),
-        .avs_ctrl_waitrequest  (rxm_bar4_waitrequest),
+        .avs_ctrl_read         (ctrl_read),
+        .avs_ctrl_write        (ctrl_write),
+        .avs_ctrl_address      (ctrl_address),
+        .avs_ctrl_writedata    (ctrl_writedata),
+        .avs_ctrl_byteenable   (ctrl_byteenable),
+        .avs_ctrl_readdata     (ctrl_readdata),
+        .avs_ctrl_readdatavalid(ctrl_readdatavalid),
+        .avs_ctrl_waitrequest  (ctrl_waitrequest),
         .avs_mem_writedata     (avs_writedata),
         .avs_mem_readdata      (avs_readdata),
         .avs_mem_address       (avs_address),

@@ -11,7 +11,7 @@ CXXFLAGS += -DVX_CFG_XLEN=$(XLEN) -DVX_CFG_XLEN_$(XLEN)
 CXXFLAGS += -fPIC
 CXXFLAGS += $(CONFIGS)
 
-LDFLAGS += -shared -ldl -pthread
+LDFLAGS += -shared -pthread
 
 SRCS := $(SRC_DIR)/vortex.cpp $(SRC_DIR)/driver.cpp
 PROJECT := libvortex-de10pro.so

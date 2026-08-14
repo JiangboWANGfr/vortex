@@ -13,11 +13,11 @@
 // limitations under the License.
 
 module vortex_shell #(
-    parameter C_CTRL_ADDR_WIDTH = 64,
+    parameter C_CTRL_ADDR_WIDTH = 20,
     parameter C_CTRL_DATA_WIDTH = 32,
-    parameter C_MEM_ADDR_WIDTH  = 64,
+    parameter C_MEM_ADDR_WIDTH  = 33,
     parameter C_MEM_DATA_WIDTH  = 512,
-    parameter C_MEM_BURST_WIDTH = 1
+    parameter C_MEM_BURST_WIDTH = 5
 ) (
     input  wire                             clk,
     input  wire                             reset,
@@ -76,14 +76,14 @@ module vortex_shell #(
     ) afu (
         .clk                    (clk),
         .reset                  (reset),
-        .rxm_bar4_read          (afu_ctrl_read),
-        .rxm_bar4_write         (afu_ctrl_write),
-        .rxm_bar4_address       (ctrl_address),
-        .rxm_bar4_writedata     (ctrl_writedata),
-        .rxm_bar4_byteenable    (ctrl_byteenable),
-        .rxm_bar4_readdata      (ctrl_readdata),
-        .rxm_bar4_readdatavalid (ctrl_readdatavalid),
-        .rxm_bar4_waitrequest   (ctrl_waitrequest),
+        .ctrl_read              (afu_ctrl_read),
+        .ctrl_write             (afu_ctrl_write),
+        .ctrl_address           (ctrl_address),
+        .ctrl_writedata         (ctrl_writedata),
+        .ctrl_byteenable        (ctrl_byteenable),
+        .ctrl_readdata          (ctrl_readdata),
+        .ctrl_readdatavalid     (ctrl_readdatavalid),
+        .ctrl_waitrequest       (ctrl_waitrequest),
         .avs_writedata          (afu_avs_writedata),
         .avs_readdata           (afu_avs_readdata),
         .avs_address            (afu_avs_address),

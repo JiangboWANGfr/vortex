@@ -16,12 +16,12 @@
 `include "vortex_afu.vh"
 
 module VX_de10pro_afu_wrap import VX_gpu_pkg::*; #(
-    parameter C_AVS_CTRL_ADDR_WIDTH = 64,
+    parameter C_AVS_CTRL_ADDR_WIDTH = 20,
     parameter C_AVS_CTRL_DATA_WIDTH = 32,
     parameter C_AVS_MEM_NUM_BANKS   = `VX_CFG_PLATFORM_MEMORY_NUM_BANKS,
     parameter C_AVS_MEM_DATA_WIDTH  = `VX_CFG_PLATFORM_MEMORY_DATA_SIZE * 8,
-    parameter C_AVS_MEM_ADDR_WIDTH  = `VX_CFG_PLATFORM_MEMORY_ADDR_WIDTH - `CLOG2(C_AVS_MEM_NUM_BANKS),
-    parameter C_AVS_MEM_BURST_WIDTH = 1
+    parameter C_AVS_MEM_ADDR_WIDTH  = 33,
+    parameter C_AVS_MEM_BURST_WIDTH = 5
 ) (
     `SCOPE_IO_DECL
 

@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 
-# Prepare an isolated DE10-Pro Quartus project. This script does not invoke
-# Quartus or program the board.
+# Integrate vortexCrypto into the existing Gen3x16 + four-DDR4 Quartus
+# baseline. This script regenerates Qsys output, but does not compile Quartus
+# or program the board.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 VORTEX_HOME=$(realpath "$SCRIPT_DIR/../../../..")
-PCIE_ROOT=$(realpath "$VORTEX_HOME/../PCIE_test")
-LEGACY_PROJECT=$PCIE_ROOT/PCIE_DDR4_Vortex
-PROJECT_DIR=$PCIE_ROOT/PCIE_DDR4_VortexCrypto
-PROJECT_MARKER=$PROJECT_DIR/.vortexcrypto-de10pro-project
+PROJECT_DIR=${VX_DE10PRO_PROJECT_DIR:-$VORTEX_HOME/../fpga_proj/PCIE_DDR4_Vortex_G3X16}
+QUARTUS_ROOT=${QUARTUS_ROOT:-/data/Quartus/tools/19.2/quartus}
+PROJECT_NAME=vortex_g3x16_ddr4x4
+SYSTEM_NAME=pcie_ddr4_system
 NUM_WARPS=${VX_DE10PRO_NUM_WARPS:-1}
 NUM_THREADS=${VX_DE10PRO_NUM_THREADS:-1}
 
@@ -19,55 +20,50 @@ if [[ ! "$NUM_WARPS" =~ ^[1-9][0-9]*$ \
     exit 1
 fi
 
-if [[ ! -f "$LEGACY_PROJECT/DE10_Pro.qsf" \
-   || ! -f "$LEGACY_PROJECT/ep_g3x8_avmmdma256_integrated.qsys" \
-   || ! -f "$LEGACY_PROJECT/vortex_shell_hw.tcl" ]]; then
-    echo "error: incomplete legacy DE10-Pro project: $LEGACY_PROJECT" >&2
+if [[ ! -d "$PROJECT_DIR" ]]; then
+    echo "error: FPGA project directory does not exist: $PROJECT_DIR" >&2
     exit 1
 fi
+PROJECT_DIR=$(realpath "$PROJECT_DIR")
 
-if [[ ! -f "$VORTEX_HOME/VX_config.toml" \
-   || ! -f "$VORTEX_HOME/VX_types.toml" \
-   || ! -f "$VORTEX_HOME/hw/rtl/afu/de10pro/vortex_shell.sv" ]]; then
-    echo "error: incomplete vortexCrypto checkout: $VORTEX_HOME" >&2
-    exit 1
-fi
+PROJECT_QSF=$PROJECT_DIR/$PROJECT_NAME.qsf
+SYSTEM_FILE=$PROJECT_DIR/$SYSTEM_NAME.qsys
+QSYS_SCRIPT=$QUARTUS_ROOT/sopc_builder/bin/qsys-script
+QSYS_GENERATE=$QUARTUS_ROOT/sopc_builder/bin/qsys-generate
+COMPONENT_TEMPLATE=$SCRIPT_DIR/vortex_shell_hw.tcl.in
+INTEGRATION_SCRIPT=$SCRIPT_DIR/integrate_vortex.tcl
+VORTEX_SHELL=$VORTEX_HOME/hw/rtl/afu/de10pro/vortex_shell.sv
 
-if [[ -e "$PROJECT_DIR" && ! -f "$PROJECT_MARKER" ]]; then
-    echo "error: refusing to overwrite unmarked directory: $PROJECT_DIR" >&2
-    exit 1
-fi
+for required_file in \
+    "$PROJECT_QSF" \
+    "$SYSTEM_FILE" \
+    "$COMPONENT_TEMPLATE" \
+    "$INTEGRATION_SCRIPT" \
+    "$VORTEX_HOME/VX_config.toml" \
+    "$VORTEX_HOME/VX_types.toml" \
+    "$VORTEX_SHELL"; do
+    if [[ ! -f "$required_file" ]]; then
+        echo "error: required file is missing: $required_file" >&2
+        exit 1
+    fi
+done
 
-mkdir -p "$PROJECT_DIR"
-touch "$PROJECT_MARKER"
-
-# Keep only the reusable board, Qsys, and generated-IP baseline. Existing
-# build results in PROJECT_DIR are intentionally left alone on a refresh.
-rsync -a \
-    --exclude='/.git/' \
-    --exclude='/.codex' \
-    --exclude='/.qsys_edit/' \
-    --exclude='/db/' \
-    --exclude='/qdb/' \
-    --exclude='/incremental_db/' \
-    --exclude='/output_files/' \
-    --exclude='/results/' \
-    --exclude='/demo_batch/' \
-    --exclude='/tmp-clearbox/' \
-    --exclude='/synth_dumps/' \
-    --exclude='/ip_upgrade_port_diff_reports/' \
-    --exclude='/*.rpt' \
-    --exclude='/*.csv' \
-    --exclude='/*.sof' \
-    "$LEGACY_PROJECT/" "$PROJECT_DIR/"
+for required_tool in "$QSYS_SCRIPT" "$QSYS_GENERATE"; do
+    if [[ ! -x "$required_tool" ]]; then
+        echo "error: required Quartus tool is missing: $required_tool" >&2
+        exit 1
+    fi
+done
 
 GENERATED_DIR=$PROJECT_DIR/generated/vortexcrypto
 CONFIG_DIR=$GENERATED_DIR/config
 FILELIST=$GENERATED_DIR/sources.f
 QSF_FRAGMENT=$GENERATED_DIR/vortex_sources.qsf
+COMPONENT_FILE=$PROJECT_DIR/vortex_shell_hw.tcl
+CUSTOM_IP=$PROJECT_DIR/ip/pcie_ddr4_system/pcie_ddr4_system_vortex_shell_0.ip
 mkdir -p "$CONFIG_DIR"
 
-CONFIG_FLAGS="-DSYNTHESIS=1 -DQUARTUS=1 -DNDEBUG=1 -DVX_CFG_XLEN=32 -DVX_CFG_XLEN_32=1 -DVX_CFG_NUM_CLUSTERS=1 -DVX_CFG_NUM_CORES=1 -DVX_CFG_NUM_WARPS=$NUM_WARPS -DVX_CFG_NUM_THREADS=$NUM_THREADS -DVX_CFG_EXT_F_DISABLE=1 -DVX_CFG_EXT_D_DISABLE=1 -DVX_CFG_PLATFORM_MEMORY_NUM_BANKS=1 -DVX_CFG_PLATFORM_MEMORY_INTERLEAVE=0"
+CONFIG_FLAGS="-DSYNTHESIS=1 -DQUARTUS=1 -DNDEBUG=1 -DVX_CFG_XLEN=32 -DVX_CFG_XLEN_32=1 -DVX_CFG_NUM_CLUSTERS=1 -DVX_CFG_NUM_CORES=1 -DVX_CFG_NUM_WARPS=$NUM_WARPS -DVX_CFG_NUM_THREADS=$NUM_THREADS -DVX_CFG_EXT_F_DISABLE=1 -DVX_CFG_EXT_D_DISABLE=1 -DVX_CFG_PLATFORM_MEMORY_NUM_BANKS=1 -DVX_CFG_PLATFORM_MEMORY_INTERLEAVE=0 -DVX_CFG_PLATFORM_CLOCK_RATE=125"
 
 XLEN=32 python3 "$VORTEX_HOME/ci/gen_config.py" \
     --config "$VORTEX_HOME/VX_config.toml" \
@@ -96,6 +92,7 @@ XLEN=32 python3 "$VORTEX_HOME/ci/gen_config.py" \
     -DVX_CFG_EXT_D_DISABLE=1 \
     -DVX_CFG_PLATFORM_MEMORY_NUM_BANKS=1 \
     -DVX_CFG_PLATFORM_MEMORY_INTERLEAVE=0 \
+    -DVX_CFG_PLATFORM_CLOCK_RATE=125 \
     -I"$CONFIG_DIR" \
     -I"$VORTEX_HOME/hw/rtl" \
     -I"$VORTEX_HOME/hw/rtl/libs" \
@@ -117,13 +114,16 @@ XLEN=32 python3 "$VORTEX_HOME/ci/gen_config.py" \
             +incdir+*)
                 printf 'set_global_assignment -name SEARCH_PATH "%s"\n' "${entry#+incdir+}"
                 ;;
+            */hw/rtl/afu/de10pro/vortex_shell.sv)
+                ;;
             *.sv)
                 printf 'set_global_assignment -name SYSTEMVERILOG_FILE "%s"\n' "$entry"
                 ;;
             *.v)
                 printf 'set_global_assignment -name VERILOG_FILE "%s"\n' "$entry"
                 ;;
-            '') ;;
+            '')
+                ;;
             *)
                 echo "error: unsupported source-list entry: $entry" >&2
                 exit 1
@@ -132,53 +132,12 @@ XLEN=32 python3 "$VORTEX_HOME/ci/gen_config.py" \
     done < "$FILELIST"
 } > "$QSF_FRAGMENT"
 
-# Drop the hand-maintained myvortex source list and every legacy feature macro.
-# Board pin, timing, Qsys, and IP assignments remain unchanged.
-QSF_TMP=$(mktemp "$PROJECT_DIR/DE10_Pro.qsf.XXXXXX")
-awk '
-    /^[[:space:]]*#?[[:space:]]*set_global_assignment -name VERILOG_MACRO / { next }
-    /^[[:space:]]*set_global_assignment -name SEARCH_PATH .*myvortex/ { next }
-    /^[[:space:]]*set_global_assignment -name SYSTEMVERILOG_FILE .*myvortex/ { next }
-    { print }
-' "$PROJECT_DIR/DE10_Pro.qsf" > "$QSF_TMP"
-printf '\n# vortexCrypto current-master RTL (RV32, 1 cluster/core, %s warp(s), %s thread(s), F/D disabled, one memory bank)\n' \
-    "$NUM_WARPS" "$NUM_THREADS" >> "$QSF_TMP"
-cat "$QSF_FRAGMENT" >> "$QSF_TMP"
-mv "$QSF_TMP" "$PROJECT_DIR/DE10_Pro.qsf"
+awk -v shell="$VORTEX_SHELL" '
+    { gsub(/@VORTEX_SHELL@/, shell); print }
+' "$COMPONENT_TEMPLATE" > "$COMPONENT_FILE"
 
-# Qsys component discovery and the cached synthesis copy must agree. The
-# project deliberately keeps IP regeneration disabled to preserve the tested
-# PCIe/DDR4 shell.
-TCL_TMP=$(mktemp "$PROJECT_DIR/vortex_shell_hw.tcl.XXXXXX")
-awk -v shell="$VORTEX_HOME/hw/rtl/afu/de10pro/vortex_shell.sv" '
-    /^package require -exact qsys / {
-        print "package require -exact qsys 19.2"
-        next
-    }
-    /^# vortex shell for aes test$/ {
-        print "# Vortex DE10-Pro shell"
-        next
-    }
-    /^set_module_property DESCRIPTION / {
-        print "set_module_property DESCRIPTION \"Vortex DE10-Pro shell\""
-        next
-    }
-    /^add_fileset_file vortex_shell[.]sv SYSTEM_VERILOG PATH / {
-        print "add_fileset_file vortex_shell.sv SYSTEM_VERILOG PATH {" shell "} TOP_LEVEL_FILE"
-        next
-    }
-    { print }
-' "$PROJECT_DIR/vortex_shell_hw.tcl" > "$TCL_TMP"
-mv "$TCL_TMP" "$PROJECT_DIR/vortex_shell_hw.tcl"
-
-while IFS= read -r cached_shell; do
-    cp "$VORTEX_HOME/hw/rtl/afu/de10pro/vortex_shell.sv" "$cached_shell"
-done < <(find "$PROJECT_DIR" -type f \
-    -path '*/vortex_shell_*/synth/vortex_shell.sv' -print)
-
-if grep -Eiq 'myvortex/hw|aes test|EXT_(AES|SHA|KECCAK|GHASH|CHACHA|POLY1305)' \
-    "$PROJECT_DIR/DE10_Pro.qsf" "$PROJECT_DIR/vortex_shell_hw.tcl"; then
-    echo "error: legacy Vortex or crypto assignment/description remains in prepared project" >&2
+if ! grep -Fq 'source generated/vortexcrypto/vortex_sources.qsf' "$PROJECT_QSF"; then
+    echo "error: $PROJECT_QSF does not source the generated Vortex assignments" >&2
     exit 1
 fi
 
@@ -191,16 +150,50 @@ for macro in \
     'VX_CFG_EXT_F_DISABLE=1' \
     'VX_CFG_EXT_D_DISABLE=1' \
     'VX_CFG_PLATFORM_MEMORY_NUM_BANKS=1' \
-    'VX_CFG_PLATFORM_MEMORY_INTERLEAVE=0'; do
+    'VX_CFG_PLATFORM_MEMORY_INTERLEAVE=0' \
+    'VX_CFG_PLATFORM_CLOCK_RATE=125'; do
     if ! grep -Fq "VERILOG_MACRO \"$macro\"" "$QSF_FRAGMENT"; then
         echo "error: missing generated macro: $macro" >&2
         exit 1
     fi
 done
 
-git -C "$VORTEX_HOME" rev-parse HEAD > "$GENERATED_DIR/VORTEX_SOURCE_REVISION"
+SEARCH_PATH="$PROJECT_DIR,\$"
+"$QSYS_SCRIPT" \
+    --quartus-project="$PROJECT_DIR/$PROJECT_NAME" \
+    --rev="$PROJECT_NAME" \
+    --system-file="$SYSTEM_FILE" \
+    --search-path="$SEARCH_PATH" \
+    --script="$INTEGRATION_SCRIPT"
+
+"$QSYS_GENERATE" "$SYSTEM_FILE" \
+    --synthesis=VERILOG \
+    --quartus-project="$PROJECT_DIR/$PROJECT_NAME" \
+    --rev="$PROJECT_NAME" \
+    --search-path="$SEARCH_PATH"
+
+CUSTOM_IP_ASSIGNMENT="set_global_assignment -name IP_FILE ip/pcie_ddr4_system/pcie_ddr4_system_vortex_shell_0.ip"
+QSYS_ASSIGNMENT="set_global_assignment -name QSYS_FILE pcie_ddr4_system.qsys"
+for assignment in "$CUSTOM_IP_ASSIGNMENT" "$QSYS_ASSIGNMENT"; do
+    if [[ $(grep -Fxc "$assignment" "$PROJECT_QSF") -ne 1 ]]; then
+        echo "error: expected exactly one QSF assignment: $assignment" >&2
+        exit 1
+    fi
+done
+if [[ ! -f "$CUSTOM_IP" ]]; then
+    echo "error: generated Vortex child IP is missing: $CUSTOM_IP" >&2
+    exit 1
+fi
+if grep -Fq 'QIP_FILE pcie_ddr4_system/pcie_ddr4_system.qip' "$PROJECT_QSF"; then
+    echo "error: generated QIP and QSYS source mechanisms must not be mixed" >&2
+    exit 1
+fi
+
+git -C "$VORTEX_HOME" describe --always --dirty \
+    > "$GENERATED_DIR/VORTEX_SOURCE_REVISION"
 
 echo "Prepared: $PROJECT_DIR"
-echo "Profile: 1 core, $NUM_WARPS warp(s), $NUM_THREADS thread(s)"
+echo "Profile: RV32, 1 core, $NUM_WARPS warp(s), $NUM_THREADS thread(s), DDR4A"
+echo "Control window: BAR0 + 0x1000"
 echo "Source fragment: $QSF_FRAGMENT"
-echo "Quartus was not invoked."
+echo "Quartus compilation and board programming were not invoked."
