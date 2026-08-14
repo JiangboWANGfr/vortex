@@ -27,7 +27,9 @@ The Qsys connections are:
 - `DUT.coreclkout_hip` to the Vortex clock
 - `DUT.app_nreset_status` to the Vortex reset interface
 - `BAR_INTERPRETER.bri_master` to Vortex control at BAR0 offset `0x1000`
-- the Vortex memory master to `ddr4_clock_crossing_bridge_ddr4a.s0` at base 0
+- the Vortex memory master to `ddr4_ingress_pipe_ddr4a.s0` at base 0
+- `ddr4_ingress_pipe_ddr4a.m0` to
+  `ddr4_clock_crossing_bridge_ddr4a.s0` at base 0
 
 ## Prepare the project
 
@@ -39,7 +41,8 @@ Run from any directory:
 
 The script generates the Vortex configuration and source assignments under
 `generated/vortexcrypto`, updates `pcie_ddr4_system.qsys`, and regenerates its
-synthesis output. It does not run a Quartus compilation or program the board.
+synthesis output. It also generates the PCIe DUT child IP when that output is
+missing or stale. It does not run a Quartus compilation or program the board.
 
 The target and Quartus installation can be overridden when working in an
 isolated checkout:

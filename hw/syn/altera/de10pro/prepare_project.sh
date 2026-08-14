@@ -28,6 +28,9 @@ PROJECT_DIR=$(realpath "$PROJECT_DIR")
 
 PROJECT_QSF=$PROJECT_DIR/$PROJECT_NAME.qsf
 SYSTEM_FILE=$PROJECT_DIR/$SYSTEM_NAME.qsys
+PCIE_DUT_IP=$PROJECT_DIR/ip/pcie_example_design/pcie_example_design_DUT.ip
+PCIE_DUT_OUTPUT_DIR=$PROJECT_DIR/ip/pcie_example_design/pcie_example_design_DUT
+PCIE_DUT_QIP=$PCIE_DUT_OUTPUT_DIR/pcie_example_design_DUT.qip
 QSYS_SCRIPT=$QUARTUS_ROOT/sopc_builder/bin/qsys-script
 QSYS_GENERATE=$QUARTUS_ROOT/sopc_builder/bin/qsys-generate
 COMPONENT_TEMPLATE=$SCRIPT_DIR/vortex_shell_hw.tcl.in
@@ -37,6 +40,7 @@ VORTEX_SHELL=$VORTEX_HOME/hw/rtl/afu/de10pro/vortex_shell.sv
 for required_file in \
     "$PROJECT_QSF" \
     "$SYSTEM_FILE" \
+    "$PCIE_DUT_IP" \
     "$COMPONENT_TEMPLATE" \
     "$INTEGRATION_SCRIPT" \
     "$VORTEX_HOME/VX_config.toml" \
@@ -176,6 +180,14 @@ SEARCH_PATH="$PROJECT_DIR,\$"
     --rev="$PROJECT_NAME" \
     --search-path="$SEARCH_PATH"
 
+if [[ ! -f "$PCIE_DUT_QIP" || "$PCIE_DUT_IP" -nt "$PCIE_DUT_QIP" ]]; then
+    "$QSYS_GENERATE" "$PCIE_DUT_IP" \
+        --synthesis=VERILOG \
+        --output-directory="$PCIE_DUT_OUTPUT_DIR" \
+        --family='Stratix 10' \
+        --part=1SG280HU1F50E1VG
+fi
+
 CUSTOM_IP_ASSIGNMENT="set_global_assignment -name IP_FILE ip/pcie_ddr4_system/pcie_ddr4_system_vortex_shell_0.ip"
 QSYS_ASSIGNMENT="set_global_assignment -name QSYS_FILE pcie_ddr4_system.qsys"
 for assignment in "$CUSTOM_IP_ASSIGNMENT" "$QSYS_ASSIGNMENT"; do
@@ -186,6 +198,10 @@ for assignment in "$CUSTOM_IP_ASSIGNMENT" "$QSYS_ASSIGNMENT"; do
 done
 if [[ ! -f "$CUSTOM_IP" ]]; then
     echo "error: generated Vortex child IP is missing: $CUSTOM_IP" >&2
+    exit 1
+fi
+if [[ ! -f "$PCIE_DUT_QIP" ]]; then
+    echo "error: generated PCIe DUT QIP is missing: $PCIE_DUT_QIP" >&2
     exit 1
 fi
 if grep -Fq 'QIP_FILE pcie_ddr4_system/pcie_ddr4_system.qip' "$PROJECT_QSF"; then
