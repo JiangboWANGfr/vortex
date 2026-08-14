@@ -94,7 +94,7 @@ interface VX_warp_ctl_if import VX_gpu_pkg::*; ();
         output bar_phase,
 
         output warp_pending_alm_empty,
-        output lsu_sched_drained,
+        input  lsu_sched_drained,
 
         input dvstack_wid,
         output dvstack_ptr

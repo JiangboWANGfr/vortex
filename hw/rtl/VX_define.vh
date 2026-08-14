@@ -295,6 +295,20 @@
     end \
     /* verilator lint_on GENUNNAMED */
 
+`ifdef QUARTUS
+`define REDUCE_TREE(__op, __out, __in, __n, __outw, __inw) \
+    if (1) begin \
+        VX_reduce_tree #( \
+            .IN_W  (__inw), \
+            .OUT_W (__outw), \
+            .N     (__n), \
+            .OP    ("__op") \
+        ) reduce_inst ( \
+            .data_in(__in), \
+            .data_out(__out) \
+        ); \
+    end
+`else
 `define REDUCE_TREE(__op, __out, __in, __n, __outw, __inw) \
     VX_reduce_tree #( \
         .IN_W  (__inw), \
@@ -305,7 +319,20 @@
         .data_in(__in), \
         .data_out(__out) \
     )
+`endif
 
+`ifdef QUARTUS
+`define POP_COUNT_EX(out, in, model) \
+    if (1) begin \
+        VX_popcount #( \
+            .N ($bits(in)), \
+            .MODEL (model) \
+        ) __pop_count_ex ( \
+            .data_in  (in), \
+            .data_out (out) \
+        ); \
+    end
+`else
 `define POP_COUNT_EX(out, in, model) \
     VX_popcount #( \
         .N ($bits(in)), \
@@ -314,6 +341,7 @@
         .data_in  (in), \
         .data_out (out) \
     )
+`endif
 
 `define POP_COUNT(out, in) `POP_COUNT_EX(out, in, 1)
 
@@ -328,6 +356,22 @@
     end \
     /* verilator lint_on GENUNNAMED */
 
+`ifdef QUARTUS
+`define BUFFER_EX(dst, src, ena, resetw, latency) \
+    if (1) begin \
+        VX_pipe_register #( \
+            .DATAW  ($bits(dst)), \
+            .RESETW (resetw), \
+            .DEPTH  (latency) \
+        ) __buffer_ex ( \
+            .clk      (clk), \
+            .reset    (reset), \
+            .enable   (ena), \
+            .data_in  (src), \
+            .data_out (dst) \
+        ); \
+    end
+`else
 `define BUFFER_EX(dst, src, ena, resetw, latency) \
     VX_pipe_register #( \
         .DATAW  ($bits(dst)), \
@@ -340,9 +384,24 @@
         .data_in  (src), \
         .data_out (dst) \
     )
+`endif
 
 `define BUFFER(dst, src) `BUFFER_EX(dst, src, 1'b1, $bits(dst), 1)
 
+`ifdef QUARTUS
+`define NEG_EDGE(dst, src) \
+    if (1) begin \
+        VX_edge_trigger #( \
+            .POS  (0), \
+            .INIT (0) \
+        ) __neg_edge ( \
+            .clk      (clk), \
+            .reset    (1'b0), \
+            .data_in  (src), \
+            .data_out (dst) \
+        ); \
+    end
+`else
 `define NEG_EDGE(dst, src) \
     VX_edge_trigger #( \
         .POS  (0), \
@@ -353,6 +412,7 @@
         .data_in  (src), \
         .data_out (dst) \
     )
+`endif
 
 ///////////////////////////////////////////////////////////////////////////////
 

@@ -26,7 +26,7 @@ show_help()
 {
     show_usage
     echo "  where"
-    echo "--driver: gpu, simx, rtlsim, oape, xrt"
+    echo "--driver: gpu, simx, rtlsim, opae, xrt, de10pro"
     echo "--app: any subfolder test under regression, graphics, mpi, opencl, or hip"
     echo "--perf: 0=disable, 1=core, 3=icache, 4=dcache, 5=l2cache, 6=l3cache, 7=mem,"
     echo "        11=tcu, 12=raster, 13=tex, 14=om, 15=rtu, 16=dxa"
@@ -90,7 +90,7 @@ parse_args() {
 set_driver_path() {
     case $DRIVER in
         gpu) DRIVER_PATH="" ;;
-        simx|rtlsim|opae|xrt) DRIVER_PATH="$ROOT_DIR/sw/runtime/$DRIVER" ;;
+        simx|rtlsim|opae|xrt|de10pro) DRIVER_PATH="$ROOT_DIR/sw/runtime/$DRIVER" ;;
         *) echo "Invalid driver: $DRIVER"; exit 1 ;;
     esac
 }
