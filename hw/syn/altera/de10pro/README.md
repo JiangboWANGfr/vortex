@@ -96,7 +96,17 @@ clock after a workload has stopped:
 ```bash
 ./sw/runtime/vortex-de10pro-boardctl
 ./sw/runtime/vortex-de10pro-boardctl --clock-hz 200000000
+./sw/runtime/vortex-de10pro-boardctl --fan-percent 75
+./sw/runtime/vortex-de10pro-boardctl --fan-percent 0
+./sw/runtime/vortex-de10pro-boardctl --fan-full
+./sw/runtime/vortex-de10pro-boardctl --fan-auto
 ```
+
+`--fan-percent` accepts 0 through 100 and uses the same open-loop mapping as
+the Terasic Nios demo: 100 is full-on, 0 is full-off, and 1 through 99 map to
+DAC codes 8 through 120. It disables automatic temperature control until
+`--fan-auto` is issued, so monitor board temperature during manual operation.
+`--fan-dac` remains available for raw MAX6651 diagnostics.
 
 The tool and runtime take the same exclusive device lock, so do not run them
 concurrently. A clock request quiesces Vortex and drains the DDR4A CDC before

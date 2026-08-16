@@ -14,6 +14,7 @@
 
 using vortex::de10pro::BoardManager;
 using vortex::de10pro::BoardManagerIo;
+using vortex::de10pro::BoardDiagnostics;
 using vortex::de10pro::BoardProbeResult;
 using vortex::de10pro::BoardTelemetry;
 using vortex::de10pro::ClockPollResult;
@@ -185,6 +186,66 @@ void test_telemetry_and_units() {
          "50 MHz timestamp ticks must convert to 20 ns each");
   expect(BoardManager::clock_hz_to_mhz(199600000) == 200,
          "clock capability conversion must round to nearest MHz");
+  uint32_t fan_mode = 0;
+  uint32_t fan_dac = 0;
+  expect(BoardManager::fan_percent_to_control(100, &fan_mode, &fan_dac)
+         && fan_mode == VX_DE10PRO_BM_FAN_CONTROL_FULL_ON
+         && fan_dac == 8,
+         "100 percent must select full-on");
+  expect(BoardManager::fan_percent_to_control(75, &fan_mode, &fan_dac)
+         && fan_mode == VX_DE10PRO_BM_FAN_CONTROL_MANUAL_DAC
+         && fan_dac == 36,
+         "75 percent must match the Terasic DAC conversion");
+  expect(BoardManager::fan_percent_to_control(50, &fan_mode, &fan_dac)
+         && fan_mode == VX_DE10PRO_BM_FAN_CONTROL_MANUAL_DAC
+         && fan_dac == 64,
+         "50 percent must match the Terasic DAC conversion");
+  expect(BoardManager::fan_percent_to_control(0, &fan_mode, &fan_dac)
+         && fan_mode == VX_DE10PRO_BM_FAN_CONTROL_FULL_OFF
+         && fan_dac == 120,
+         "zero percent must select full-off");
+  expect(!BoardManager::fan_percent_to_control(101, &fan_mode, &fan_dac),
+         "fan percentages above 100 must be rejected");
+}
+
+void test_partial_round_telemetry() {
+  // A round that lost one I2C transaction still commits the sensors that did
+  // read back. Telemetry must survive it and report which sensors are valid,
+  // rather than being discarded wholesale on the STATUS fault bit.
+  constexpr uint32_t capabilities = VX_DE10PRO_BM_CAP_TELEMETRY
+                                  | VX_DE10PRO_BM_CAP_TEMPERATURE
+                                  | VX_DE10PRO_BM_CAP_POWER0
+                                  | VX_DE10PRO_BM_CAP_POWER1
+                                  | VX_DE10PRO_BM_CAP_DIAGNOSTICS;
+  FakeMmio mmio;
+  populate_identity(&mmio, capabilities);
+  mmio.set(VX_DE10PRO_BM_REG_STATUS,
+           VX_DE10PRO_BM_STATUS_READY | VX_DE10PRO_BM_STATUS_FAULT);
+  mmio.set(VX_DE10PRO_BM_REG_SENSOR_VALID, 0x1feu);
+  // The temperature shadow still holds the previous round's value; the caller
+  // must discard it on the SENSOR_VALID bit, not on it being unreadable.
+  mmio.set(VX_DE10PRO_BM_REG_TEMP_MC, 41000);
+  mmio.set(VX_DE10PRO_BM_REG_POWER0_RAW, 262143);
+  mmio.set(VX_DE10PRO_BM_REG_POWER1_RAW, 5004);
+  mmio.set(VX_DE10PRO_BM_REG_POWER0_LSB_NW, 208435);
+  mmio.set(VX_DE10PRO_BM_REG_POWER1_LSB_NW, 5002440);
+  mmio.set(VX_DE10PRO_BM_REG_SAMPLE_COUNT, 11);
+
+  auto manager = make_manager(&mmio);
+  expect(manager.probe() == BoardProbeResult::Available,
+         "diagnostics-capable manager must probe");
+  BoardTelemetry telemetry{};
+  expect(manager.read_telemetry(&telemetry),
+         "a faulted round must still return the sensors that committed");
+  expect(telemetry.sensor_valid == 0x1feu,
+         "per-sensor validity must come from SENSOR_VALID");
+  expect(!(telemetry.sensor_valid & VX_DE10PRO_BM_SENSOR_TEMP),
+         "the failed temperature sensor must report invalid");
+  expect((telemetry.sensor_valid & VX_DE10PRO_BM_SENSOR_INPUT_POWER)
+      && (telemetry.sensor_valid & VX_DE10PRO_BM_SENSOR_CORE_POWER),
+         "both power sensors must report valid");
+  expect(telemetry.power_raw[0] == 262143 && telemetry.power_raw[1] == 5004,
+         "power readings must survive a faulted round");
 }
 
 void test_capability_gates() {
@@ -196,6 +257,10 @@ void test_capability_gates() {
   mmio.reads.clear();
   expect(!manager.supports_clock_control(),
          "partial clock capabilities must not enable control");
+  expect(!manager.supports_fan_override(),
+         "missing fan-override capability must disable manual control");
+  expect(!manager.set_fan_control(VX_DE10PRO_BM_FAN_CONTROL_FULL_ON, 0),
+         "capability gate must reject manual fan control");
   expect(manager.begin_clock_request(VX_DE10PRO_BM_CLOCK_HZ_200M, 1)
          == ClockRequestResult::NotSupported,
          "begin must reject missing dynamic-clock capabilities");
@@ -206,11 +271,37 @@ void test_capability_gates() {
          "capability-gated clock operations must not touch clock CSRs");
 }
 
+void test_diagnostics() {
+  FakeMmio mmio;
+  populate_identity(&mmio, VX_DE10PRO_BM_CAP_DIAGNOSTICS);
+  mmio.set(VX_DE10PRO_BM_REG_STATUS,
+           VX_DE10PRO_BM_STATUS_READY | VX_DE10PRO_BM_STATUS_FAULT);
+  mmio.set(VX_DE10PRO_BM_REG_SENSOR_VALID, 0x123u);
+  mmio.set(VX_DE10PRO_BM_REG_I2C_ERROR, 0x25551234u);
+  auto manager = make_manager(&mmio);
+  expect(manager.probe() == BoardProbeResult::Available,
+         "diagnostic manager must probe");
+  BoardDiagnostics diagnostics{};
+  expect(manager.read_diagnostics(&diagnostics),
+         "diagnostic registers must be readable");
+  expect(diagnostics.status
+         == (VX_DE10PRO_BM_STATUS_READY | VX_DE10PRO_BM_STATUS_FAULT),
+         "diagnostics must preserve board status");
+  expect(diagnostics.sensor_valid == 0x123u,
+         "diagnostics must preserve the sensor-valid bitmap");
+  expect(VX_DE10PRO_BM_I2C_ERROR_COUNT_OF(diagnostics.i2c_error) == 0x1234u
+      && VX_DE10PRO_BM_I2C_ERROR_STEP_OF(diagnostics.i2c_error) == 0x15u
+      && VX_DE10PRO_BM_I2C_ERROR_BUS_OF(diagnostics.i2c_error) == 1u
+      && (diagnostics.i2c_error & VX_DE10PRO_BM_I2C_ERROR_NACK),
+         "diagnostics must decode the packed I2C error register");
+}
+
 void test_clock_request() {
   constexpr uint32_t capabilities = VX_DE10PRO_BM_CAP_CLOCK_READBACK
                                   | VX_DE10PRO_BM_CAP_DYNAMIC_CLOCK
                                   | VX_DE10PRO_BM_CAP_QUIESCE
-                                  | VX_DE10PRO_BM_CAP_FAN_CONTROL;
+                                  | VX_DE10PRO_BM_CAP_FAN_CONTROL
+                                  | VX_DE10PRO_BM_CAP_FAN_OVERRIDE;
   FakeMmio mmio;
   populate_identity(&mmio, capabilities);
   mmio.set(VX_DE10PRO_BM_REG_CLOCK_STATUS,
@@ -219,6 +310,9 @@ void test_clock_request() {
   mmio.set(VX_DE10PRO_BM_REG_CLOCK_CUR_HZ,
            VX_DE10PRO_BM_CLOCK_HZ_250M);
   mmio.set(VX_DE10PRO_BM_REG_CLOCK_MEASURED_HZ, 249875000);
+  mmio.set(VX_DE10PRO_BM_REG_FAN_CONTROL,
+           VX_DE10PRO_BM_FAN_CONTROL_VALUE(
+               VX_DE10PRO_BM_FAN_CONTROL_AUTO, 0x20));
   mmio.set(VX_DE10PRO_BM_REG_FAN_STATUS,
            VX_DE10PRO_BM_FAN_STATUS_VALID
          | VX_DE10PRO_BM_FAN_STATUS_FULL_ON
@@ -241,6 +335,35 @@ void test_clock_request() {
          && (fan_status & VX_DE10PRO_BM_FAN_STATUS_FULL_ON)
          && VX_DE10PRO_BM_FAN_STATUS_DAC_OF(fan_status) == 0xa5u,
          "fan-control mode and DAC code must decode from the fixed fields");
+  uint32_t fan_control = 0;
+  expect(manager.read_fan_control(&fan_control)
+         && VX_DE10PRO_BM_FAN_CONTROL_MODE_OF(fan_control)
+             == VX_DE10PRO_BM_FAN_CONTROL_AUTO
+         && VX_DE10PRO_BM_FAN_CONTROL_DAC_OF(fan_control) == 0x20u,
+         "fan-control request must decode from the fixed fields");
+  expect(!manager.set_fan_control(4, 0x20),
+         "out-of-range fan mode must be rejected");
+  expect(manager.set_fan_control(VX_DE10PRO_BM_FAN_CONTROL_FULL_OFF, 120),
+         "full-off fan request must be written");
+  expect(mmio.writes.back()
+         == std::make_pair(uint64_t(VX_DE10PRO_BM_BAR0_BASE
+                                  + VX_DE10PRO_BM_REG_FAN_CONTROL),
+                          VX_DE10PRO_BM_FAN_CONTROL_VALUE(
+                              VX_DE10PRO_BM_FAN_CONTROL_FULL_OFF, 120)),
+         "full-off request must use the FAN_CONTROL register");
+  expect(!manager.set_fan_control(VX_DE10PRO_BM_FAN_CONTROL_MANUAL_DAC,
+                                  0x100),
+         "out-of-range fan DAC must be rejected");
+  expect(manager.set_fan_control(VX_DE10PRO_BM_FAN_CONTROL_MANUAL_DAC,
+                                 0x44),
+         "manual fan DAC request must be written");
+  expect(mmio.writes.back()
+         == std::make_pair(uint64_t(VX_DE10PRO_BM_BAR0_BASE
+                                  + VX_DE10PRO_BM_REG_FAN_CONTROL),
+                          VX_DE10PRO_BM_FAN_CONTROL_VALUE(
+                              VX_DE10PRO_BM_FAN_CONTROL_MANUAL_DAC, 0x44)),
+         "manual fan request must use the FAN_CONTROL register");
+  mmio.writes.clear();
   uint32_t nominal_hz = 0;
   expect(manager.read_current_clock_hz(&nominal_hz)
          && nominal_hz == VX_DE10PRO_BM_CLOCK_HZ_250M,
@@ -356,7 +479,10 @@ static_assert(VX_DE10PRO_BM_REG_MAGIC == 0x00u
            && VX_DE10PRO_BM_REG_CLOCK_CUR_HZ == 0x3cu
            && VX_DE10PRO_BM_REG_QUIESCE_STATUS == 0x50u
            && VX_DE10PRO_BM_REG_CLOCK_MEASURED_HZ == 0x58u
-           && VX_DE10PRO_BM_REG_FAN_STATUS == 0x5cu,
+           && VX_DE10PRO_BM_REG_FAN_STATUS == 0x5cu
+           && VX_DE10PRO_BM_REG_FAN_CONTROL == 0x60u
+           && VX_DE10PRO_BM_REG_SENSOR_VALID == 0x64u
+           && VX_DE10PRO_BM_REG_I2C_ERROR == 0x68u,
               "board-manager CSR offsets are part of ABI v1");
 static_assert(VX_DE10PRO_BM_QUIESCE_REQUEST == 0x00000001u
            && VX_DE10PRO_BM_QUIESCE_SHELL_ACK == 0x00000002u
@@ -366,14 +492,16 @@ static_assert(VX_DE10PRO_BM_QUIESCE_REQUEST == 0x00000001u
               "quiesce status bits are part of ABI v1");
 static_assert((VX_DE10PRO_BM_REG_FAN_STATUS & 3u) == 0,
               "board-manager registers must be word aligned");
-static_assert(VX_DE10PRO_BM_REG_FAN_STATUS
+static_assert(VX_DE10PRO_BM_REG_FAN_CONTROL
               < VX_DE10PRO_BM_APERTURE_SIZE,
               "board-manager registers must fit their BAR0 aperture");
 
 int main() {
   test_probe_fallback();
   test_telemetry_and_units();
+  test_partial_round_telemetry();
   test_capability_gates();
+  test_diagnostics();
   test_clock_request();
   if (failures != 0) {
     std::fprintf(stderr, "%d board-manager tests failed\n", failures);

@@ -50,7 +50,8 @@ other device kernels do not change.
 ## 3. Version and capability discovery
 
 `MAGIC` is `0x5658424d` (`VXBM`). `VERSION[31:16]` is the major version and
-`VERSION[15:0]` the minor version. Version 1.0 is `0x00010000`.
+`VERSION[15:0]` the minor version. Version 1.5 is `0x00010005`; version 1.4 is
+`0x00010004`; version 1.3 is `0x00010003`; version 1.2 is `0x00010002`; version 1.1 is `0x00010001`; version 1.0 is `0x00010000`.
 
 - A failed magic read or magic mismatch means no board manager. Runtime device
   open continues normally.
@@ -71,6 +72,7 @@ Capabilities:
 | 4 | `POWER1` | Power channel 1 raw code and scale are valid |
 | 5 | `TIMESTAMP` | Sample timestamp and timebase are valid |
 | 6 | `FAN_CONTROL` | `FAN_STATUS` mode, validity, and DAC readback are implemented |
+| 7 | `FAN_OVERRIDE` | Read/write `FAN_CONTROL` automatic, full-on, manual-DAC, and full-off requests are implemented |
 | 8 | `CLOCK_READBACK` | Nominal and measured clock readback is implemented |
 | 9 | `DYNAMIC_CLOCK` | Runtime IOPLL profile selection is implemented |
 | 10 | `QUIESCE` | Source-side and post-CDC drain acknowledgements are implemented |
@@ -80,7 +82,7 @@ board-manager fault. Reserved bits read as zero.
 
 ---
 
-## 4. BAR0 CSR ABI v1.0
+## 4. BAR0 CSR ABI v1.5
 
 | Offset | Access | Register | Encoding |
 |---:|:---:|---|---|
@@ -107,7 +109,24 @@ board-manager fault. Reserved bits read as zero.
 | `0x50` | RO | `QUIESCE_STATUS` | request, source/target acknowledgements, completion |
 | `0x54` | RO | `CLOCK_ERROR` | stable error code for the completed request |
 | `0x58` | RO | `CLOCK_MEASURED_HZ` | measured Vortex Hz; zero means unavailable |
-| `0x5c` | RO | `FAN_STATUS` | bit 0 full-on; bit 1 valid; bits 15:8 fan DAC code |
+| `0x5c` | RO | `FAN_STATUS` | bit 0 full-on; bit 1 valid; bit 2 full-off; bits 15:8 applied fan DAC code |
+| `0x60` | RW | `FAN_CONTROL` | bits 1:0 requested mode; bits 15:8 requested fan DAC code |
+| `0x64` | RO | `SENSOR_VALID` | bit 0 temperature, bits 1-2 tachometers, bits 3-5 input power monitor, bits 6-8 core power monitor; bits 11:9 SCL and bits 14:12 SDA sticky per-bus drive faults |
+| `0x68` | RO | `I2C_ERROR` | error count, last scheduler step/bus, NACK/timeout/stuck/short-read flags, and bits 31:30 the unacknowledged byte |
+
+`SENSOR_VALID` reports the sensors that committed in the last poll round. A
+round that lost one I2C transaction still commits the rest, so software must
+gate each reading on its own bit rather than discarding the whole sample on
+`STATUS.TELEMETRY_VALID`.
+
+The drive-fault bits (v1.5) and the unacknowledged-byte field (v1.4) occupy
+bits that read as zero on earlier minor versions, so software must check the
+minor version before reporting them. A drive-fault bit means the master pulled
+that line low for a full phase and still read it high, which separates a device
+that did not answer from a drive that never reached the wire. The
+unacknowledged-byte field is `0` device address (write), `1` register address,
+`2` write data, or `3` device address (read, after the repeated start), and is
+only meaningful while the NACK flag is set.
 
 `CLOCK_REQ_HZ` accepts exactly 100,000,000, 125,000,000, 200,000,000,
 and 250,000,000 Hz in ABI v1. `CLOCK_CUR_HZ` is the nominal selected rate;
@@ -116,12 +135,16 @@ management clock.
 Hardware rejects every other request without choosing a nearby rate. Profile
 IDs, MIF indices, and PLL parameters are private hardware implementation details.
 
-`FAN_STATUS.FULL_ON` is bit 0, `FAN_STATUS.VALID` is bit 1, and
+`FAN_STATUS.FULL_ON` is bit 0, `FAN_STATUS.VALID` is bit 1,
+`FAN_STATUS.FULL_OFF` is bit 2, and
 `FAN_STATUS.DAC` is bits 15:8. `VALID` remains zero after reset until a
 MAX6651 configuration write is acknowledged. While it is zero, software
 reports the fan-control mode as unknown. When `VALID=1` and `FULL_ON=1`, the
 DAC field is reported but ignored by the fan drive; otherwise the 8-bit DAC
-code controls the configured fan level. All other bits read zero.
+code controls the configured fan level. All other bits read zero. `FAN_CONTROL.MODE` is automatic (`0`), forced
+full-on (`1`), manual DAC (`2`), or forced full-off (`3`). Reset selects automatic mode and DAC `0x20`. Manual modes bypass
+temperature and non-fan sensor fail-safe decisions until automatic mode is
+restored. An unacknowledged fan-bus write never updates `FAN_STATUS`.
 
 Power conversion is:
 

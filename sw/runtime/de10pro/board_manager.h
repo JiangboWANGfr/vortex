@@ -39,6 +39,11 @@ enum class ClockPollResult {
 struct BoardTelemetry {
   uint32_t capabilities;
   uint32_t status;
+  // Per-sensor validity for the committed snapshot. A round that failed one
+  // I2C transaction still commits the sensors that did read back, so each
+  // field below must be checked against its own bit rather than against the
+  // all-or-nothing STATUS_TELEMETRY_VALID flag.
+  uint32_t sensor_valid;
   int32_t temperature_mc;
   uint32_t fan_rpm;
   uint32_t power_raw[2];
@@ -46,6 +51,12 @@ struct BoardTelemetry {
   uint32_t sample_count;
   uint64_t timestamp;
   uint32_t timestamp_hz;
+};
+
+struct BoardDiagnostics {
+  uint32_t status;
+  uint32_t sensor_valid;
+  uint32_t i2c_error;
 };
 
 struct ClockState {
@@ -66,9 +77,15 @@ public:
   uint32_t capabilities() const;
 
   bool read_telemetry(BoardTelemetry* telemetry) const;
+  bool read_diagnostics(BoardDiagnostics* diagnostics) const;
   bool read_current_clock_hz(uint32_t* frequency_hz) const;
   bool read_measured_clock_hz(uint32_t* frequency_hz) const;
   bool read_fan_status(uint32_t* status) const;
+  bool read_fan_control(uint32_t* control) const;
+  bool supports_fan_override() const;
+  bool set_fan_control(uint32_t mode, uint32_t dac) const;
+  static bool fan_percent_to_control(uint32_t percent, uint32_t* mode,
+                                     uint32_t* dac);
   bool supports_clock_control() const;
   ClockRequestResult begin_clock_request(uint32_t frequency_hz,
                                          uint32_t sequence) const;

@@ -93,8 +93,13 @@ bool BoardManager::read_telemetry(BoardTelemetry* telemetry) const {
      || !read(VX_DE10PRO_BM_REG_STATUS, &next.status)) {
       return false;
     }
-    if (!(next.status & VX_DE10PRO_BM_STATUS_TELEMETRY_VALID)) {
-      return false;
+    if (capabilities_ & VX_DE10PRO_BM_CAP_DIAGNOSTICS) {
+      if (!read(VX_DE10PRO_BM_REG_SENSOR_VALID, &next.sensor_valid)) {
+        return false;
+      }
+    } else {
+      next.sensor_valid =
+          (next.status & VX_DE10PRO_BM_STATUS_TELEMETRY_VALID) ? 0x1ffu : 0u;
     }
     if ((capabilities_ & VX_DE10PRO_BM_CAP_TEMPERATURE)
      && !read(VX_DE10PRO_BM_REG_TEMP_MC, &temperature)) {
@@ -139,6 +144,21 @@ bool BoardManager::read_telemetry(BoardTelemetry* telemetry) const {
   return false;
 }
 
+bool BoardManager::read_diagnostics(BoardDiagnostics* diagnostics) const {
+  if (diagnostics == nullptr || !available_
+   || !(capabilities_ & VX_DE10PRO_BM_CAP_DIAGNOSTICS)) {
+    return false;
+  }
+  BoardDiagnostics next{};
+  if (!read(VX_DE10PRO_BM_REG_STATUS, &next.status)
+   || !read(VX_DE10PRO_BM_REG_SENSOR_VALID, &next.sensor_valid)
+   || !read(VX_DE10PRO_BM_REG_I2C_ERROR, &next.i2c_error)) {
+    return false;
+  }
+  *diagnostics = next;
+  return true;
+}
+
 bool BoardManager::read_current_clock_hz(uint32_t* frequency_hz) const {
   if (frequency_hz == nullptr || !available_
    || !(capabilities_ & VX_DE10PRO_BM_CAP_CLOCK_READBACK)) {
@@ -174,6 +194,46 @@ bool BoardManager::read_fan_status(uint32_t* status) const {
   return status != nullptr && available_
       && (capabilities_ & VX_DE10PRO_BM_CAP_FAN_CONTROL)
       && read(VX_DE10PRO_BM_REG_FAN_STATUS, status);
+}
+
+bool BoardManager::read_fan_control(uint32_t* control) const {
+  return control != nullptr && supports_fan_override()
+      && read(VX_DE10PRO_BM_REG_FAN_CONTROL, control);
+}
+
+bool BoardManager::supports_fan_override() const {
+  return available_
+      && (capabilities_ & VX_DE10PRO_BM_CAP_FAN_OVERRIDE);
+}
+
+bool BoardManager::set_fan_control(uint32_t mode, uint32_t dac) const {
+  if (!supports_fan_override() || dac > 0xffu
+   || (mode != VX_DE10PRO_BM_FAN_CONTROL_AUTO
+    && mode != VX_DE10PRO_BM_FAN_CONTROL_FULL_ON
+    && mode != VX_DE10PRO_BM_FAN_CONTROL_MANUAL_DAC
+    && mode != VX_DE10PRO_BM_FAN_CONTROL_FULL_OFF)) {
+    return false;
+  }
+  return write(VX_DE10PRO_BM_REG_FAN_CONTROL,
+               VX_DE10PRO_BM_FAN_CONTROL_VALUE(mode, dac));
+}
+
+bool BoardManager::fan_percent_to_control(uint32_t percent, uint32_t* mode,
+                                                  uint32_t* dac) {
+  if (percent > 100 || mode == nullptr || dac == nullptr) {
+    return false;
+  }
+  if (percent == 100) {
+    *mode = VX_DE10PRO_BM_FAN_CONTROL_FULL_ON;
+    *dac = 8;
+  } else if (percent == 0) {
+    *mode = VX_DE10PRO_BM_FAN_CONTROL_FULL_OFF;
+    *dac = 120;
+  } else {
+    *mode = VX_DE10PRO_BM_FAN_CONTROL_MANUAL_DAC;
+    *dac = 8 + ((100 - percent) * (120 - 8)) / 100;
+  }
+  return true;
 }
 
 bool BoardManager::supports_clock_control() const {
