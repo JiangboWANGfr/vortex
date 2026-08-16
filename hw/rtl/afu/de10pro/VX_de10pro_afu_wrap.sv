@@ -27,6 +27,10 @@ module VX_de10pro_afu_wrap import VX_gpu_pkg::*; #(
 
     input  wire                                  clk,
     input  wire                                  reset,
+    input  wire                                  clock_change_req,
+    input  wire                                  clock_reset_req,
+    output wire                                  quiescent,
+    output wire                                  reset_active,
 
     input  wire                                  avs_ctrl_read,
     input  wire                                  avs_ctrl_write,
@@ -108,12 +112,15 @@ module VX_de10pro_afu_wrap import VX_gpu_pkg::*; #(
     reg launch_seen_busy;
     reg [31:0] launch_seq;
 
-    wire start = run_valid && (state == STATE_IDLE) && ~vx_reset;
+    wire start = run_valid && (state == STATE_IDLE)
+              && ~vx_reset && ~clock_change_req;
     wire [7:0] status_state = vx_reset ? STATE_INIT : state;
     wire [63:0] status_data = {launch_seq, 24'b0, status_state};
+    assign quiescent = (state == STATE_IDLE) && ~vx_busy;
+    assign reset_active = vx_reset;
 
     always @(posedge clk) begin
-        if (reset) begin
+        if (reset || clock_reset_req) begin
             state            <= STATE_IDLE;
             vx_reset         <= 1'b1;
             vx_reset_ctr     <= RESET_CTR_WIDTH'(`VX_CFG_RESET_DELAY - 1);

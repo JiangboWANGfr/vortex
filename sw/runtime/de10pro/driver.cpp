@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <linux/ioctl.h>
 #include <new>
+#include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -117,8 +118,9 @@ pcie_handle_t drv_open(uint32_t bdf, pcie_bar_t bar, uint32_t kmem_size) {
     set_error("failed to query system page size");
     return nullptr;
   }
-  if (kmem_size == 0 || kmem_size > kMaxDmaSize
-   || (kmem_size % static_cast<uint32_t>(page_size)) != 0) {
+  if (kmem_size > kMaxDmaSize
+   || (kmem_size != 0
+    && (kmem_size % static_cast<uint32_t>(page_size)) != 0)) {
     set_error("DMA staging size must be page-aligned and no larger than 1 MiB");
     return nullptr;
   }
@@ -126,6 +128,17 @@ pcie_handle_t drv_open(uint32_t bdf, pcie_bar_t bar, uint32_t kmem_size) {
   const int fd = open(kDevicePath, O_RDWR | O_CLOEXEC);
   if (fd < 0) {
     set_errno_error("open /dev/intel_fpga_pcie_drv");
+    return nullptr;
+  }
+  // The kernel driver stores DMA staging and descriptor state per FPGA, not
+  // per file handle. Hold this lock before any device-select or DMA ioctl.
+  if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+    if (errno == EWOULDBLOCK) {
+      set_error("PCIe device is in use by another Vortex process");
+    } else {
+      set_errno_error("lock /dev/intel_fpga_pcie_drv");
+    }
+    close(fd);
     return nullptr;
   }
 
@@ -149,26 +162,31 @@ pcie_handle_t drv_open(uint32_t bdf, pcie_bar_t bar, uint32_t kmem_size) {
     return nullptr;
   }
 
-  if (ioctl(fd, INTEL_FPGA_PCIE_IOCTL_SET_KMEM_SIZE, kmem_size) != 0) {
-    set_errno_error("SET_KMEM_SIZE ioctl");
-    close(fd);
-    return nullptr;
-  }
+  void* kmem = nullptr;
+  if (kmem_size != 0) {
+    if (ioctl(fd, INTEL_FPGA_PCIE_IOCTL_SET_KMEM_SIZE, kmem_size) != 0) {
+      set_errno_error("SET_KMEM_SIZE ioctl");
+      close(fd);
+      return nullptr;
+    }
 
-  void* kmem = mmap(nullptr, kmem_size, PROT_READ | PROT_WRITE, MAP_SHARED,
-                    fd, 0);
-  if (kmem == MAP_FAILED) {
-    set_errno_error("mmap DMA staging memory");
-    (void)ioctl(fd, INTEL_FPGA_PCIE_IOCTL_SET_KMEM_SIZE, 0u);
-    close(fd);
-    return nullptr;
+    kmem = mmap(nullptr, kmem_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                fd, 0);
+    if (kmem == MAP_FAILED) {
+      set_errno_error("mmap DMA staging memory");
+      (void)ioctl(fd, INTEL_FPGA_PCIE_IOCTL_SET_KMEM_SIZE, 0u);
+      close(fd);
+      return nullptr;
+    }
   }
 
   auto* state = new (std::nothrow) device_state{fd, kmem, kmem_size};
   if (state == nullptr) {
     set_error("failed to allocate PCIe driver state");
-    munmap(kmem, kmem_size);
-    (void)ioctl(fd, INTEL_FPGA_PCIE_IOCTL_SET_KMEM_SIZE, 0u);
+    if (kmem != nullptr) {
+      munmap(kmem, kmem_size);
+      (void)ioctl(fd, INTEL_FPGA_PCIE_IOCTL_SET_KMEM_SIZE, 0u);
+    }
     close(fd);
     return nullptr;
   }
@@ -180,8 +198,10 @@ void drv_close(pcie_handle_t handle) {
   if (state == nullptr) {
     return;
   }
-  munmap(state->kmem, state->kmem_size);
-  (void)ioctl(state->fd, INTEL_FPGA_PCIE_IOCTL_SET_KMEM_SIZE, 0u);
+  if (state->kmem != nullptr) {
+    munmap(state->kmem, state->kmem_size);
+    (void)ioctl(state->fd, INTEL_FPGA_PCIE_IOCTL_SET_KMEM_SIZE, 0u);
+  }
   close(state->fd);
   delete state;
 }

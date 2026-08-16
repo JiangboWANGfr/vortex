@@ -19,10 +19,14 @@
 // the backend library named by $VORTEX_DRIVER, resolves vx_dev_init, and
 // calls it to populate a callbacks_t with the backend's implementations.
 //
-// The backend is a pure transport HAL providing exactly three things:
+// The backend is a pure transport HAL providing three required services:
 //   * device lifecycle           — dev_open / dev_close
 //   * a register channel to CP   — cp_reg_read / cp_reg_write
 //   * CP-visible host memory     — host_mem_alloc / host_mem_free
+//
+// Keep callbacks_t at its original six-pointer ABI. Optional platform data is
+// exposed by a separately discovered vx_dev_platform_query symbol so either
+// side of the dlopen boundary may be upgraded independently.
 //
 // All return values are 0 on success, non-zero on failure.
 // ============================================================================
@@ -66,6 +70,13 @@ typedef struct {
   int (*host_mem_free) (void* dev_ctx, uint64_t cp_addr);
 
 } callbacks_t;
+
+#define VX_PLATFORM_QUERY_CLOCK_RATE_HZ 1u
+#define VX_PLATFORM_QUERY_NOT_SUPPORTED (-2)
+#define VX_DEV_PLATFORM_QUERY_SYMBOL "vx_dev_platform_query"
+
+typedef int (*vx_dev_platform_query_t)(void* dev_ctx, uint32_t query_id,
+                                       uint64_t* out_value);
 
 // Each backend's vortex.cpp implements this function (typically via the
 // shared template in <callbacks.inc>) to populate the table.

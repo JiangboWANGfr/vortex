@@ -41,16 +41,20 @@ namespace {
 // One backend per process; reused across vx_device_open calls.
 void*       g_backend_lib = nullptr;
 callbacks_t g_backend_cb  {};
+vx_dev_platform_query_t g_backend_platform_query = nullptr;
 
 } // anonymous namespace
 
 namespace vx {
 
-vx_result_t dispatcher_get_callbacks(const callbacks_t** out) {
-    if (!out) return VX_ERR_INVALID_VALUE;
+vx_result_t dispatcher_get_callbacks(
+    const callbacks_t** out,
+    vx_dev_platform_query_t* out_platform_query) {
+    if (!out || !out_platform_query) return VX_ERR_INVALID_VALUE;
 
     if (g_backend_lib != nullptr) {
         *out = &g_backend_cb;
+        *out_platform_query = g_backend_platform_query;
         return VX_SUCCESS;
     }
 
@@ -81,8 +85,17 @@ vx_result_t dispatcher_get_callbacks(const callbacks_t** out) {
         return VX_ERR_DEVICE_LOST;
     }
 
+    (void)dlerror();
+    auto platform_query = reinterpret_cast<vx_dev_platform_query_t>(
+        dlsym(h, VX_DEV_PLATFORM_QUERY_SYMBOL));
+    if (dlerror() != nullptr) {
+        platform_query = nullptr;
+    }
+
     g_backend_lib = h;
+    g_backend_platform_query = platform_query;
     *out = &g_backend_cb;
+    *out_platform_query = g_backend_platform_query;
     return VX_SUCCESS;
 }
 

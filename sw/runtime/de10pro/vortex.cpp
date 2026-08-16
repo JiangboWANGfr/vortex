@@ -7,7 +7,9 @@
 // the Intel Gen3x16 BAR and board-DDR DMA interfaces.
 
 #include <common.h>
+#include <de10pro_board_manager_abi.h>
 
+#include "board_manager.h"
 #include "driver.h"
 #include "vortex_afu.h"
 
@@ -18,11 +20,17 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
 
 using namespace vortex;
+using vortex::de10pro::BoardManager;
+using vortex::de10pro::BoardManagerIo;
+using vortex::de10pro::BoardProbeResult;
+using vortex::de10pro::ClockPollResult;
+using vortex::de10pro::ClockState;
 
 namespace {
 
@@ -100,11 +108,13 @@ public:
       : mmio_base_(VX_DE10PRO_DEFAULT_MMIO_BASE),
         staging_addr_(VX_DE10PRO_DEFAULT_STAGING),
         staging_size_(VX_DE10PRO_DEFAULT_CHUNK_SIZE),
-        pcie_(nullptr) {}
+        pcie_(nullptr),
+        afu_initialized_(false) {}
 
   ~vx_device() {
     if (pcie_ != nullptr) {
-      if (env_u32("DE10PRO_VX_RESET_ON_CLOSE", 1) != 0)
+      if (afu_initialized_
+       && env_u32("DE10PRO_VX_RESET_ON_CLOSE", 1) != 0)
         (void)mmio_write32(AFU_IMAGE_MMIO_CMD_TYPE,
                            AFU_IMAGE_CMD_RESET);
       drv_close(pcie_);
@@ -146,6 +156,45 @@ public:
       return -1;
     }
 
+    BoardManagerIo board_io{
+        pcie_,
+        [](void* context, uint64_t address, uint32_t* value) {
+          return drv_read32(context, address, value);
+        },
+        [](void* context, uint64_t address, uint32_t value) {
+          return drv_write32(context, address, value);
+        }};
+    board_manager_.reset(new BoardManager(board_io));
+    const auto probe = board_manager_->probe();
+    if (probe == BoardProbeResult::IoError) {
+      std::fprintf(stderr,
+                   "[VXDRV] DE10-Pro board-manager probe failed: %s\n",
+                   driver_error());
+      return -1;
+    }
+    if (probe != BoardProbeResult::Available
+     && env_u32("DE10PRO_VX_VERBOSE_STATUS", 0) != 0) {
+      std::fprintf(stdout,
+                   "[VXDRV] optional DE10-Pro board manager unavailable (%u)\n",
+                   static_cast<unsigned int>(probe));
+    }
+    if (probe == BoardProbeResult::Available
+     && board_manager_->supports_clock_control()) {
+      ClockState clock_state{};
+      if (board_manager_->poll_clock_request(0, &clock_state)
+          == ClockPollResult::IoError) {
+        std::fprintf(stderr,
+                     "[VXDRV] DE10-Pro clock-status read failed: %s\n",
+                     driver_error());
+        return -1;
+      }
+      if (clock_state.status & VX_DE10PRO_BM_CLOCK_BUSY) {
+        std::fprintf(stderr,
+                     "[VXDRV] DE10-Pro clock change is still in progress\n");
+        return -1;
+      }
+    }
+
     if (mmio_read64(AFU_IMAGE_MMIO_DEV_CAPS, &gpu_dev_caps_) != 0
      || mmio_read64(AFU_IMAGE_MMIO_ISA_CAPS, &gpu_isa_caps_) != 0) {
       return -1;
@@ -155,7 +204,28 @@ public:
                      AFU_IMAGE_CMD_RESET) != 0) {
       return -1;
     }
-    return wait_idle();
+    if (wait_idle() != 0) {
+      return -1;
+    }
+    afu_initialized_ = true;
+    return 0;
+  }
+
+  int platform_query(uint32_t query_id, uint64_t* value) {
+    if (value == nullptr || query_id != VX_PLATFORM_QUERY_CLOCK_RATE_HZ
+     || board_manager_ == nullptr || !board_manager_->available()) {
+      return VX_PLATFORM_QUERY_NOT_SUPPORTED;
+    }
+    if (!(board_manager_->capabilities()
+        & VX_DE10PRO_BM_CAP_CLOCK_READBACK)) {
+      return VX_PLATFORM_QUERY_NOT_SUPPORTED;
+    }
+    uint32_t frequency_hz = 0;
+    if (!board_manager_->read_current_clock_hz(&frequency_hz)) {
+      return -1;
+    }
+    *value = frequency_hz;
+    return 0;
   }
 
   int cp_reg_write(uint32_t off, uint32_t value) {
@@ -724,6 +794,8 @@ private:
   uint64_t staging_addr_;
   uint64_t staging_size_;
   pcie_handle_t pcie_;
+  bool afu_initialized_;
+  std::unique_ptr<BoardManager> board_manager_;
 
   std::mutex host_mutex_;
   std::map<uint64_t, uint64_t> host_regions_;
@@ -745,4 +817,5 @@ private:
   uint64_t gpu_isa_caps_ = 0;
 };
 
+#define VX_BACKEND_HAS_PLATFORM_QUERY
 #include <callbacks.inc>

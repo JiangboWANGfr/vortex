@@ -18,16 +18,21 @@ The default profile is deliberately small for bring-up:
 - RV32, one cluster, one core
 - one warp and one thread/lane
 - F and D disabled
-- three-cycle I-cache and D-cache pipelines for the 250 MHz core clock
+- three-cycle I-cache and D-cache pipelines for the maximum 250 MHz core clock
 - one platform-memory bank with interleaving disabled
-- 250 MHz platform clock (`DUT.coreclkout_hip`)
+- one runtime-reconfigurable IOPLL with 100, 125, 200, and 250 MHz profiles;
+  the initial profile is 250 MHz
 
 The Qsys connections are:
 
-- `DUT.coreclkout_hip` to the Vortex clock
-- `DUT.app_nreset_status` to the Vortex reset interface
+- `CLK_50_B3I` to the runtime-reconfigurable Vortex IOPLL reference input
+- `CLK_50_B2C` to the free-running board-management and clock-control logic
+- the IOPLL output to Vortex through dedicated control and DDR4A CDC bridges
+- the synchronized dynamic-clock reset to the Vortex reset interface
 - `BAR_INTERPRETER.bri_master` to Vortex control at BAR0 offset `0x1000`
-- the Vortex memory master to `ddr4_ingress_pipe_ddr4a.s0` at base 0
+- `BAR_INTERPRETER.bri_master` to the board manager at BAR0 offset `0x2000`
+- the Vortex memory master through the CDC and post-CDC drain monitor to
+  `ddr4_ingress_pipe_ddr4a.s0` at base 0
 - `ddr4_ingress_pipe_ddr4a.m0` to
   `ddr4_clock_crossing_bridge_ddr4a.s0` at base 0
 
@@ -40,7 +45,8 @@ Run from any directory:
 ```
 
 The script generates the Vortex configuration and source assignments under
-`generated/vortexcrypto`, updates `pcie_ddr4_system.qsys`, and regenerates its
+`generated/vortexcrypto`, creates the four-profile IOPLL MIF under
+`generated/dynclk`, updates `pcie_ddr4_system.qsys`, and regenerates its
 synthesis output. It also generates the PCIe DUT child IP when that output is
 missing or stale. It does not run a Quartus compilation or program the board.
 
@@ -81,6 +87,21 @@ matching FPGA is installed, select its 16-bit bus/device/function value with
 `DE10PRO_PCIE_BDF`; zero selects the driver default device. The kernel DMA
 buffer and queues are shared per FPGA, so run only one Vortex runtime process per
 device.
+
+The runtime reports the board manager's active Vortex clock instead of the
+compile-time 250 MHz value when the new SOF is loaded. Use the board tool to
+read temperature, fan, power, and clock telemetry or to change the Vortex
+clock after a workload has stopped:
+
+```bash
+./sw/runtime/vortex-de10pro-boardctl
+./sw/runtime/vortex-de10pro-boardctl --clock-hz 200000000
+```
+
+The tool and runtime take the same exclusive device lock, so do not run them
+concurrently. A clock request quiesces Vortex and drains the DDR4A CDC before
+asserting Vortex reset and reconfiguring the IOPLL; PCIe and all DDR4 clocks
+remain unchanged.
 
 ## Compile and validate later
 

@@ -13,8 +13,12 @@ CXXFLAGS += $(CONFIGS)
 
 LDFLAGS += -shared -pthread
 
-SRCS := $(SRC_DIR)/vortex.cpp $(SRC_DIR)/driver.cpp
+SRCS := $(SRC_DIR)/vortex.cpp $(SRC_DIR)/driver.cpp \
+	$(SRC_DIR)/board_manager.cpp
 PROJECT := libvortex-de10pro.so
+BOARDCTL := vortex-de10pro-boardctl
+BOARDCTL_SRCS := $(SRC_DIR)/boardctl.cpp $(SRC_DIR)/driver.cpp \
+	$(SRC_DIR)/board_manager.cpp
 
 ifdef DEBUG
 	CXXFLAGS += -g -O0
@@ -24,10 +28,13 @@ endif
 
 .PHONY: all force clean
 
-all: $(DESTDIR)/$(PROJECT)
+all: $(DESTDIR)/$(PROJECT) $(DESTDIR)/$(BOARDCTL)
 
 $(DESTDIR)/$(PROJECT): $(SRCS) $(CONFIG_FILE)
 	$(CXX) $(CXXFLAGS) $(SRCS) $(LDFLAGS) -o $@
+
+$(DESTDIR)/$(BOARDCTL): $(BOARDCTL_SRCS) $(CONFIG_FILE)
+	$(CXX) $(CXXFLAGS) $(BOARDCTL_SRCS) -pthread -o $@
 
 $(CONFIG_FILE): force
 	@mkdir -p $(@D)
@@ -40,4 +47,4 @@ $(CONFIG_FILE): force
 	 fi
 
 clean:
-	rm -f $(DESTDIR)/$(PROJECT) $(CONFIG_FILE)
+	rm -f $(DESTDIR)/$(PROJECT) $(DESTDIR)/$(BOARDCTL) $(CONFIG_FILE)

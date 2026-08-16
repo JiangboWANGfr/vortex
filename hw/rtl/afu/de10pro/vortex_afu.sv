@@ -26,6 +26,10 @@ module de10pro_vortex_afu import VX_gpu_pkg::*; #(
 
     input  wire                             clk,
     input  wire                             reset,
+    input  wire                             clock_change_req,
+    input  wire                             clock_reset_req,
+    output wire                             quiescent,
+    output wire                             reset_active,
 
     input  wire                             ctrl_read,
     input  wire                             ctrl_write,
@@ -59,6 +63,10 @@ module de10pro_vortex_afu import VX_gpu_pkg::*; #(
 
         .clk                   (clk),
         .reset                 (reset),
+        .clock_change_req      (clock_change_req),
+        .clock_reset_req       (clock_reset_req),
+        .quiescent             (quiescent),
+        .reset_active          (reset_active),
         .avs_ctrl_read         (ctrl_read),
         .avs_ctrl_write        (ctrl_write),
         .avs_ctrl_address      (ctrl_address),

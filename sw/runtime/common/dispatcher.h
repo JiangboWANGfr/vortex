@@ -21,9 +21,12 @@ namespace vx {
 
 // Load (or reuse) the backend library named by $VORTEX_DRIVER (default
 // "simx") and return a pointer to its populated callbacks table on
-// success. The pointer is owned by the dispatcher and stays valid for
-// the lifetime of the process. Idempotent: subsequent calls hand back
-// the same table without reloading.
-vx_result_t dispatcher_get_callbacks(const callbacks_t** out);
+// success. The table pointer is owned by the dispatcher and stays valid for
+// the lifetime of the process. An optional platform-query symbol is returned
+// separately so callbacks_t retains its original binary layout. Idempotent:
+// subsequent calls hand back the same values without reloading.
+vx_result_t dispatcher_get_callbacks(
+    const callbacks_t** out,
+    vx_dev_platform_query_t* out_platform_query);
 
 } // namespace vx

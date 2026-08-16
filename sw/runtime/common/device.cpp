@@ -139,14 +139,16 @@ vx_result_t Device::open(uint32_t index, Device** out) {
     if (index != 0) return VX_ERR_INVALID_VALUE;   // one device per backend
 
     const callbacks_t* cb = nullptr;
-    auto r = dispatcher_get_callbacks(&cb);
+    vx_dev_platform_query_t platform_query = nullptr;
+    auto r = dispatcher_get_callbacks(&cb, &platform_query);
     if (r != VX_SUCCESS) return r;
 
     void* dev_ctx = nullptr;
     if (cb->dev_open(&dev_ctx) != 0)
         return VX_ERR_DEVICE_LOST;
 
-    std::unique_ptr<Platform> plat(new CallbacksAdapter(*cb, dev_ctx));
+    std::unique_ptr<Platform> plat(
+        new CallbacksAdapter(*cb, platform_query, dev_ctx));
     Device* d = new Device(std::move(plat));
     auto cr = d->cp_init();
     if (cr != VX_SUCCESS) {
@@ -816,7 +818,21 @@ vx_result_t Device::query_caps(uint32_t caps_id, uint64_t* out_value) {
     switch (caps_id) {
     case VX_CAPS_CACHE_LINE_SIZE: *out_value = CACHE_BLOCK_SIZE;             break;
     case VX_CAPS_GLOBAL_MEM_SIZE: *out_value = GLOBAL_MEM_SIZE;              break;
-    case VX_CAPS_CLOCK_RATE:      *out_value = VX_CFG_PLATFORM_CLOCK_RATE;   break;
+    case VX_CAPS_CLOCK_RATE: {
+        uint64_t frequency_hz = 0;
+        auto r = platform_->platform_query(VX_PLATFORM_QUERY_CLOCK_RATE_HZ,
+                                           &frequency_hz);
+        if (r == VX_SUCCESS && frequency_hz != 0) {
+            constexpr uint64_t hz_per_mhz = 1000000;
+            *out_value = frequency_hz / hz_per_mhz
+                       + ((frequency_hz % hz_per_mhz) >= hz_per_mhz / 2);
+        } else if (r == VX_ERR_NOT_SUPPORTED) {
+            *out_value = VX_CFG_PLATFORM_CLOCK_RATE;
+        } else {
+            return r == VX_SUCCESS ? VX_ERR_DEVICE_LOST : r;
+        }
+        break;
+    }
     case VX_CAPS_PEAK_MEM_BW:     *out_value = VX_CFG_PLATFORM_MEMORY_PEAK_BW; break;
     case VX_CAPS_VM_SUPPORT:      *out_value = vm_enabled_ ? 1 : 0;          break;
     case VX_CAPS_VM_PINNED_SIZE:  *out_value = pinned_size_;                 break;

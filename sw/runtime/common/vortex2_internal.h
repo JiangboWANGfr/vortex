@@ -135,6 +135,10 @@ public:
     virtual vx_result_t host_mem_alloc(uint64_t size, void** out_host_ptr,
                                        uint64_t* out_cp_addr) = 0;
     virtual vx_result_t host_mem_free (uint64_t cp_addr) = 0;
+
+    virtual vx_result_t platform_query(uint32_t, uint64_t*) {
+        return VX_ERR_NOT_SUPPORTED;
+    }
 };
 
 // ============================================================================
@@ -150,8 +154,10 @@ public:
 
 class CallbacksAdapter final : public Platform {
 public:
-    CallbacksAdapter(const callbacks_t& cb, void* dev_ctx)
-        : cb_(cb), dev_ctx_(dev_ctx) {}
+    CallbacksAdapter(const callbacks_t& cb,
+                     vx_dev_platform_query_t platform_query,
+                     void* dev_ctx)
+        : cb_(cb), platform_query_(platform_query), dev_ctx_(dev_ctx) {}
 
     ~CallbacksAdapter() override {
         if (cb_.dev_close && dev_ctx_) cb_.dev_close(dev_ctx_);
@@ -176,9 +182,23 @@ public:
     vx_result_t host_mem_free(uint64_t cp_addr) override {
         return r(cb_.host_mem_free(dev_ctx_, cp_addr));
     }
+    vx_result_t platform_query(uint32_t query_id, uint64_t* out) override {
+        if (!platform_query_) {
+            return VX_ERR_NOT_SUPPORTED;
+        }
+        const int rc = platform_query_(dev_ctx_, query_id, out);
+        if (rc == 0) {
+            return VX_SUCCESS;
+        }
+        if (rc == VX_PLATFORM_QUERY_NOT_SUPPORTED) {
+            return VX_ERR_NOT_SUPPORTED;
+        }
+        return VX_ERR_DEVICE_LOST;
+    }
 
 private:
     callbacks_t cb_;
+    vx_dev_platform_query_t platform_query_;
     void*       dev_ctx_;
 };
 

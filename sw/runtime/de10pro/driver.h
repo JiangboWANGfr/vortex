@@ -10,6 +10,8 @@ using pcie_address_t = uint64_t;
 using pcie_local_address_t = uint64_t;
 using pcie_bar_t = unsigned int;
 
+// A zero kmem_size opens an MMIO-only handle without touching the driver's
+// per-device DMA staging allocation.
 pcie_handle_t drv_open(uint32_t bdf, pcie_bar_t bar, uint32_t kmem_size);
 
 void drv_close(pcie_handle_t handle);

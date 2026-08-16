@@ -44,6 +44,14 @@ set_interface_property reset associatedClock clock
 set_interface_property reset synchronousEdges DEASSERT
 add_interface_port reset reset reset Input 1
 
+add_interface clock_control conduit end
+set_interface_property clock_control associatedClock ""
+set_interface_property clock_control associatedReset ""
+add_interface_port clock_control clock_change_req clock_change_req Input 1
+add_interface_port clock_control clock_reset_req clock_reset_req Input 1
+add_interface_port clock_control clock_change_ack clock_change_ack Output 1
+add_interface_port clock_control clock_reset_ack clock_reset_ack Output 1
+
 add_interface ctrl avalon end
 set_interface_property ctrl addressUnits SYMBOLS
 set_interface_property ctrl associatedClock clock

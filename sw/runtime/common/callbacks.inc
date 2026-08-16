@@ -91,3 +91,14 @@ extern "C" int vx_dev_init(callbacks_t* callbacks) {
 
   return 0;
 }
+
+#ifdef VX_BACKEND_HAS_PLATFORM_QUERY
+extern "C" int vx_dev_platform_query(void* dev_ctx, uint32_t query_id,
+                                      uint64_t* out_value) {
+  if (nullptr == dev_ctx || nullptr == out_value) {
+    return -1;
+  }
+  return reinterpret_cast<vx_device*>(dev_ctx)
+            ->platform_query(query_id, out_value);
+}
+#endif
