@@ -8,6 +8,7 @@
 #include <de10pro_board_manager_abi.h>
 
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -62,7 +63,38 @@ void print_usage(const char* program) {
                program);
 }
 
+// Groups the report for a human reader. Every line below a banner stays a bare
+// key=value pair so the output remains greppable.
+void print_section(const char* title) {
+  static const char kRule[] = "----------------------------------------";
+  constexpr int kWidth = 40;
+  const int len = static_cast<int>(std::strlen(title));
+  const int left = (kWidth - len - 2) / 2;
+  std::printf("%.*s %s %.*s\n", left, kRule, title,
+              kWidth - len - 2 - left, kRule);
+}
+
+// Prints one key=value line and pads it so every trailing comment starts at the
+// same column, just past the right edge of a section rule.
+void print_note(const char* note, const char* format, ...) {
+  constexpr int kNoteColumn = 38;
+  char line[96];
+  std::va_list args;
+  va_start(args, format);
+  std::vsnprintf(line, sizeof(line), format, args);
+  va_end(args);
+  std::printf("%-*s  # %s\n", kNoteColumn, line, note);
+}
+
 void print_telemetry(const BoardManager& manager) {
+  // Both snapshots are read up front, in the original order, so the fan
+  // section can report the tachometer alongside the fan-control state.
+  BoardDiagnostics diagnostics{};
+  const bool have_diagnostics = manager.read_diagnostics(&diagnostics);
+  BoardTelemetry telemetry{};
+  const bool have_telemetry = manager.read_telemetry(&telemetry);
+
+  print_section("clock");
   uint32_t nominal_hz = 0;
   if (manager.read_current_clock_hz(&nominal_hz)) {
     std::printf("clock.nominal_hz=%u\n", nominal_hz);
@@ -77,6 +109,7 @@ void print_telemetry(const BoardManager& manager) {
     std::printf("clock.measured_hz=unavailable\n");
   }
 
+  print_section("fan");
   uint32_t fan_status = 0;
   if (manager.read_fan_status(&fan_status)) {
     if (!(fan_status & VX_DE10PRO_BM_FAN_STATUS_VALID)) {
@@ -87,85 +120,106 @@ void print_telemetry(const BoardManager& manager) {
           : fan_status & VX_DE10PRO_BM_FAN_STATUS_FULL_OFF
               ? "full-off" : "dac";
       std::printf("fan.mode=%s\n", mode);
-      std::printf("fan.dac=%u\n",
-                  VX_DE10PRO_BM_FAN_STATUS_DAC_OF(fan_status));
+      print_note("MAX6651 code, inverted: 8=fastest, 120=off",
+                 "fan.dac=%u", VX_DE10PRO_BM_FAN_STATUS_DAC_OF(fan_status));
     }
   } else {
     std::printf("fan.mode=unavailable\n");
   }
-
-  BoardDiagnostics diagnostics{};
-  if (manager.read_diagnostics(&diagnostics)) {
-    static const char* const buses[] = {"temp", "fan", "power", "unknown"};
-    static const char* const steps[] = {
-        "fan-config", "fan-count", "input-config", "core-config",
-        "temp-local", "temp-remote", "policy-dac", "policy-config",
-        "tach0", "tach1", "input-sense", "input-vin", "input-power",
-        "core-sense", "core-vin", "core-power", "fault-full-on",
-        "commit"};
-    const uint32_t step = VX_DE10PRO_BM_I2C_ERROR_STEP_OF(
-        diagnostics.i2c_error);
-    const uint32_t bus = VX_DE10PRO_BM_I2C_ERROR_BUS_OF(
-        diagnostics.i2c_error);
-    std::printf("telemetry.status=0x%08x\n", diagnostics.status);
-    std::printf("sensor.valid=0x%03x\n",
-                diagnostics.sensor_valid & VX_DE10PRO_BM_SENSOR_VALID_MASK);
-    if (VX_DE10PRO_BM_VERSION_MINOR_OF(manager.version()) >= 5) {
-      std::printf("i2c.drive_fault_scl=0x%x\n",
-                  VX_DE10PRO_BM_DRIVE_FAULT_SCL_OF(diagnostics.sensor_valid));
-      std::printf("i2c.drive_fault_sda=0x%x\n",
-                  VX_DE10PRO_BM_DRIVE_FAULT_SDA_OF(diagnostics.sensor_valid));
-    }
-    std::printf("i2c.error_count=%u\n",
-                VX_DE10PRO_BM_I2C_ERROR_COUNT_OF(diagnostics.i2c_error));
-    std::printf("i2c.last_step=%u:%s\n", step,
-                step < sizeof(steps) / sizeof(steps[0])
-                    ? steps[step] : "unknown");
-    std::printf("i2c.last_bus=%u:%s\n", bus, buses[bus]);
-    static const char* const bytes[] = {
-        "device-address-write", "register-address", "write-data",
-        "device-address-read"};
-    std::printf("i2c.error_nack=%u\n",
-                !!(diagnostics.i2c_error & VX_DE10PRO_BM_I2C_ERROR_NACK));
-    if (VX_DE10PRO_BM_VERSION_MINOR_OF(manager.version()) >= 4) {
-      std::printf("i2c.error_byte=%u:%s\n",
-                  VX_DE10PRO_BM_I2C_ERROR_BYTE_OF(diagnostics.i2c_error),
-                  bytes[VX_DE10PRO_BM_I2C_ERROR_BYTE_OF(diagnostics.i2c_error)]);
-    }
-    std::printf("i2c.error_timeout=%u\n",
-                !!(diagnostics.i2c_error & VX_DE10PRO_BM_I2C_ERROR_TIMEOUT));
-    std::printf("i2c.error_bus_stuck=%u\n",
-                !!(diagnostics.i2c_error
-                    & VX_DE10PRO_BM_I2C_ERROR_BUS_STUCK));
-    std::printf("i2c.error_short_read=%u\n",
-                !!(diagnostics.i2c_error
-                    & VX_DE10PRO_BM_I2C_ERROR_SHORT_READ));
-  }
-
-  BoardTelemetry telemetry{};
-  if (!manager.read_telemetry(&telemetry)) {
-    return;
-  }
-  std::printf("sample.count=%u\n", telemetry.sample_count);
-  if (telemetry.capabilities & VX_DE10PRO_BM_CAP_TIMESTAMP) {
-    std::printf("sample.timestamp_ticks=%llu\n",
-                static_cast<unsigned long long>(telemetry.timestamp));
-    std::printf("sample.timestamp_hz=%u\n", telemetry.timestamp_hz);
-  }
-  if (telemetry.capabilities & VX_DE10PRO_BM_CAP_TEMPERATURE) {
-    if (telemetry.sensor_valid & VX_DE10PRO_BM_SENSOR_TEMP) {
-      std::printf("temperature.mc=%d\n", telemetry.temperature_mc);
-    } else {
-      std::printf("temperature.mc=unavailable\n");
-    }
-  }
-  if (telemetry.capabilities & VX_DE10PRO_BM_CAP_FAN) {
+  if (have_telemetry && (telemetry.capabilities & VX_DE10PRO_BM_CAP_FAN)) {
     if (telemetry.sensor_valid & VX_DE10PRO_BM_SENSOR_TACH0) {
-      std::printf("fan.rpm=%u\n", telemetry.fan_rpm);
+      print_note("measured by tachometer 0", "fan.rpm=%u", telemetry.fan_rpm);
     } else {
       std::printf("fan.rpm=unavailable\n");
     }
   }
+
+  if (have_diagnostics) {
+    print_section("diagnostics");
+    print_note("bit0 ready, bit1 telemetry valid, bit2 fault",
+               "telemetry.status=0x%08x", diagnostics.status);
+    print_note("bit0 temp, 1-2 tach, 3-5 input rail, 6-8 core rail",
+               "sensor.valid=0x%03x",
+               diagnostics.sensor_valid & VX_DE10PRO_BM_SENSOR_VALID_MASK);
+    const uint32_t error_count = VX_DE10PRO_BM_I2C_ERROR_COUNT_OF(
+        diagnostics.i2c_error);
+    std::printf("i2c.error_count=%u\n", error_count);
+    // The remaining fields describe one failure. They hold reset defaults
+    // until something fails, so report them only once there is a failure to
+    // describe. Drive faults are sticky and counted separately, so they gate
+    // on their own bits rather than on the error counter.
+    const uint32_t drive_fault_scl = VX_DE10PRO_BM_DRIVE_FAULT_SCL_OF(
+        diagnostics.sensor_valid);
+    const uint32_t drive_fault_sda = VX_DE10PRO_BM_DRIVE_FAULT_SDA_OF(
+        diagnostics.sensor_valid);
+    if (VX_DE10PRO_BM_VERSION_MINOR_OF(manager.version()) >= 5
+     && (drive_fault_scl | drive_fault_sda) != 0) {
+      std::printf("i2c.drive_fault_scl=0x%x\n", drive_fault_scl);
+      std::printf("i2c.drive_fault_sda=0x%x\n", drive_fault_sda);
+    }
+    if (error_count != 0) {
+      static const char* const buses[] = {"temp", "fan", "power", "unknown"};
+      static const char* const steps[] = {
+          "fan-config", "fan-count", "input-config", "core-config",
+          "temp-local", "temp-remote", "policy-dac", "policy-config",
+          "tach0", "tach1", "input-sense", "input-vin", "input-power",
+          "core-sense", "core-vin", "core-power", "fault-full-on",
+          "commit"};
+      const uint32_t step = VX_DE10PRO_BM_I2C_ERROR_STEP_OF(
+          diagnostics.i2c_error);
+      const uint32_t bus = VX_DE10PRO_BM_I2C_ERROR_BUS_OF(
+          diagnostics.i2c_error);
+      std::printf("i2c.last_step=%u:%s\n", step,
+                  step < sizeof(steps) / sizeof(steps[0])
+                      ? steps[step] : "unknown");
+      std::printf("i2c.last_bus=%u:%s\n", bus, buses[bus]);
+      static const char* const bytes[] = {
+          "device-address-write", "register-address", "write-data",
+          "device-address-read"};
+      std::printf("i2c.error_nack=%u\n",
+                  !!(diagnostics.i2c_error & VX_DE10PRO_BM_I2C_ERROR_NACK));
+      if (VX_DE10PRO_BM_VERSION_MINOR_OF(manager.version()) >= 4) {
+        std::printf("i2c.error_byte=%u:%s\n",
+                    VX_DE10PRO_BM_I2C_ERROR_BYTE_OF(diagnostics.i2c_error),
+                    bytes[VX_DE10PRO_BM_I2C_ERROR_BYTE_OF(diagnostics.i2c_error)]);
+      }
+      std::printf("i2c.error_timeout=%u\n",
+                  !!(diagnostics.i2c_error & VX_DE10PRO_BM_I2C_ERROR_TIMEOUT));
+      std::printf("i2c.error_bus_stuck=%u\n",
+                  !!(diagnostics.i2c_error
+                      & VX_DE10PRO_BM_I2C_ERROR_BUS_STUCK));
+      std::printf("i2c.error_short_read=%u\n",
+                  !!(diagnostics.i2c_error
+                      & VX_DE10PRO_BM_I2C_ERROR_SHORT_READ));
+    }
+  }
+
+  if (!have_telemetry) {
+    return;
+  }
+  print_section("sensors");
+  print_note("telemetry rounds completed since reset", "sample.count=%u",
+             telemetry.sample_count);
+  if (telemetry.capabilities & VX_DE10PRO_BM_CAP_TIMESTAMP) {
+    std::printf("sample.timestamp_ticks=%llu\n",
+                static_cast<unsigned long long>(telemetry.timestamp));
+    print_note("ticks per second; ticks/hz = uptime in seconds",
+               "sample.timestamp_hz=%u", telemetry.timestamp_hz);
+  }
+  if (telemetry.capabilities & VX_DE10PRO_BM_CAP_TEMPERATURE) {
+    if (telemetry.sensor_valid & VX_DE10PRO_BM_SENSOR_TEMP) {
+      // The register is signed millidegrees, so scale in floating point to
+      // keep the sign on sub-degree negative readings.
+      std::printf("temperature.celsius=%.3f\n",
+                  telemetry.temperature_mc / 1000.0);
+    } else {
+      std::printf("temperature.celsius=unavailable\n");
+    }
+  }
+  // The ABI names the channels POWER0/POWER1; the sensor bits are what
+  // identify which supply each one measures.
+  static const char* const rails[] = {"board 12V input rail",
+                                      "FPGA core rail"};
   for (uint32_t channel = 0; channel < 2; ++channel) {
     const uint32_t capability = channel == 0
         ? VX_DE10PRO_BM_CAP_POWER0 : VX_DE10PRO_BM_CAP_POWER1;
@@ -175,18 +229,18 @@ void print_telemetry(const BoardManager& manager) {
       continue;
     }
     if (!(telemetry.sensor_valid & sensor)) {
-      std::printf("power%u.uw=unavailable\n", channel);
+      print_note(rails[channel], "power%u.watts=unavailable", channel);
       continue;
     }
     std::printf("power%u.raw=%u\n", channel,
                 telemetry.power_raw[channel]);
-    std::printf("power%u.lsb_nw=%u\n", channel,
-                telemetry.power_lsb_nw[channel]);
+    print_note("nanowatts per raw LSB", "power%u.lsb_nw=%u", channel,
+               telemetry.power_lsb_nw[channel]);
     if (telemetry.power_lsb_nw[channel] != 0) {
       const uint64_t microwatts = BoardManager::power_raw_to_microwatts(
           telemetry.power_raw[channel], telemetry.power_lsb_nw[channel]);
-      std::printf("power%u.uw=%llu\n", channel,
-                  static_cast<unsigned long long>(microwatts));
+      print_note(rails[channel], "power%u.watts=%.3f", channel,
+                 microwatts / 1000000.0);
     }
   }
 }
@@ -292,7 +346,8 @@ int request_fan(const BoardManager& manager, uint32_t mode, uint32_t dac,
                       ? "full-on"
                       : mode == VX_DE10PRO_BM_FAN_CONTROL_FULL_OFF
                           ? "full-off" : "manual-dac");
-      std::printf("fan.dac=%u\n", dac);
+      print_note("MAX6651 code, inverted: 8=fastest, 120=off",
+                 "fan.dac=%u", dac);
       return 0;
     }
     if (timeout_ms == 0 || std::chrono::steady_clock::now() >= deadline) {
@@ -392,19 +447,23 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  print_section("board");
   std::printf("board.version=%u.%u\n",
               VX_DE10PRO_BM_VERSION_MAJOR_OF(manager.version()),
               VX_DE10PRO_BM_VERSION_MINOR_OF(manager.version()));
-  std::printf("board.capabilities=0x%08x\n", manager.capabilities());
+  print_note("feature bitmask, see de10pro_board_manager_abi.h",
+             "board.capabilities=0x%08x", manager.capabilities());
   print_telemetry(manager);
   int result = 0;
   if (request_fan_control) {
+    print_section("fan-request");
     result = request_fan(manager, fan_mode, fan_dac, timeout_ms);
   }
   if (result == 0 && request_fan_percent) {
     std::printf("fan.percent=%u\n", fan_percent);
   }
   if (result == 0 && request_frequency) {
+    print_section("clock-request");
     result = request_clock(manager, frequency_hz, timeout_ms);
   }
   drv_close(handle);
