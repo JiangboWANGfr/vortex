@@ -1,0 +1,41 @@
+#ifndef _COMMON_H_
+#define _COMMON_H_
+
+// AES-128-GCM, one independent message per thread, empty AAD.
+// Every message shares the key schedule, the T-tables and the GHASH table;
+// each has its own 96-bit IV. The device copies the three shared tables into
+// local memory once per CTA, so a data-dependent table lookup lands on the
+// 32-bank LMEM rather than the single-bank D-cache.
+
+#define AES_BLOCK_BYTES 16
+#define AES128_ROUNDS   10
+#define AES128_RK_BYTES ((AES128_ROUNDS + 1) * AES_BLOCK_BYTES)
+#define GCM_IV_BYTES    12
+#define GCM_TAG_BYTES   16
+
+// Four 1 KB T-tables, byte-rotations of each other.
+#define AES_TE_ENTRIES  256
+#define AES_TE_TABLES   4
+#define AES_TE_BYTES    (AES_TE_TABLES * AES_TE_ENTRIES * 4)
+
+// GHASH multiplies four bits of the operand per step, so the table holds
+// i*H for i in 0..15.
+#define GHASH_TABLE_ENTRIES 16
+#define GHASH_TABLE_BYTES   (GHASH_TABLE_ENTRIES * AES_BLOCK_BYTES)
+
+#define AES_GCM_LMEM_BYTES \
+  (AES_TE_BYTES + AES128_RK_BYTES + GHASH_TABLE_BYTES)
+
+typedef struct {
+  uint32_t num_msgs;
+  uint32_t blocks_per_msg;
+  uint64_t rk_addr;
+  uint64_t te_addr;
+  uint64_t htable_addr;
+  uint64_t iv_addr;
+  uint64_t src_addr;
+  uint64_t dst_addr;
+  uint64_t tag_addr;
+} kernel_arg_t;
+
+#endif
