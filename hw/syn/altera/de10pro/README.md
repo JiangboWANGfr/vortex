@@ -59,9 +59,18 @@ QUARTUS_ROOT=/data/Quartus/tools/19.2/quartus \
   ./hw/syn/altera/de10pro/prepare_project.sh
 ```
 
-Keep the default one-warp/one-thread profile for initial bring-up. When those
-counts are increased later, the prepare-script overrides and the software
-`CONFIGS` macros must be changed together.
+Core, warp, and thread counts are the three overrides the script accepts:
+
+```bash
+VX_DE10PRO_NUM_CORES=1 VX_DE10PRO_NUM_WARPS=1 VX_DE10PRO_NUM_THREADS=1 \
+  ./hw/syn/altera/de10pro/prepare_project.sh
+```
+
+All three default to 1. Everything else in the generated configuration is
+fixed by the script. Keep the default one-core/one-warp/one-thread profile for
+initial bring-up. When those counts are increased later, the prepare-script
+overrides and the software `CONFIGS` macros must be changed together; the FPGA
+project's `scripts/build.sh` sets both from one profile name.
 
 ## Build the host runtime
 
