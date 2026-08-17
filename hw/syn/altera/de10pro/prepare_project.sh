@@ -69,7 +69,7 @@ GENERATED_DIR=$PROJECT_DIR/generated/vortexcrypto
 CONFIG_DIR=$GENERATED_DIR/config
 FILELIST=$GENERATED_DIR/sources.f
 QSF_FRAGMENT=$GENERATED_DIR/vortex_sources.qsf
-COMPONENT_FILE=$PROJECT_DIR/vortex_shell_hw.tcl
+COMPONENT_FILE=$GENERATED_DIR/vortex_shell_hw.tcl
 DYNCLK_MIF=$PROJECT_DIR/generated/dynclk/vortex_iopll_profiles.mif
 mkdir -p "$CONFIG_DIR"
 
@@ -172,7 +172,9 @@ for macro in \
     fi
 done
 
-SEARCH_PATH="$PROJECT_DIR,$PROJECT_DIR/rtl/board_mgmt,\$"
+# Platform Designer only looks for *_hw.tcl directly inside each search-path
+# entry, so every directory holding a component must be listed explicitly.
+SEARCH_PATH="$PROJECT_DIR,$PROJECT_DIR/rtl/board_mgmt,$GENERATED_DIR,\$"
 (
     cd "$PROJECT_DIR"
     "$QSYS_SCRIPT" \
